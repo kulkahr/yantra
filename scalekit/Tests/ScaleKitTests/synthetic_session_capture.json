@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "meta": {
+    "mac": "31:06:1B:CB:0B:D8",
+    "firmwareVersion": "1.5.0.0",
+    "recordedAt": "2026-09-21T08:00:00Z",
+    "kind": "session",
+    "notes": "SYNTHETIC reference capture (not hardware): generated from DeviceSimulator wire semantics - init 0x0009, four device ACKs draining the config flush, final 0x4802 record (72.85 kg, remain=0). Proves the replay harness itself; real captures replace it per analysis/captures/README.md."
+  },
+  "events": [
+    { "t": 0.412, "char": "A621", "hex": "1002310F" },
+    { "t": 0.441, "char": "A625", "hex": "000130" },
+    { "t": 0.470, "char": "A625", "hex": "000130" },
+    { "t": 0.498, "char": "A625", "hex": "000130" },
+    { "t": 0.527, "char": "A625", "hex": "000130" },
+    { "t": 12.905, "char": "A621", "hex": "100A79041BCB0BD8310607BE" }
+  ]
+}

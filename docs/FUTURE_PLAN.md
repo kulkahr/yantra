@@ -3,10 +3,13 @@
 Baseline: SRD-000…007, TDD, DIAGRAMS, FEASIBILITY_AND_UNKNOWNS (2026-09-20).
 
 ## Phase 0 — Protocol library & offline tests (week 1–2)
-- [ ] Swift package `ScaleKit` (portable core): frame codec, CRC32 (`0xEDB88320`, init 0, xorout 0), XOR-MAC variant gate, packet assembler, command encoders (`0x0001`–`0x1007`), `0x4802` record parser with all flag combinations.
-- [ ] Golden-vector tests from captured frames + decompiler-derived truth.
-- [ ] Fake `BlePort` replay harness (recorded notify sequences drive state machines).
-- Exit: 100% of codec/parser unit tests green without hardware.
+- [x] Swift package `ScaleKit` (`scalekit/`): CRC32 (`0xEDB88320`/init 0/xorout 0), XOR-MAC variant gate, frame codec + packet assembler, command builders (register/auth/bind/unbind/ACK/init/time/user-info/unit/target/clear), deviceId derivation, `0x4802` weight-record parser with flag handling.
+- [x] Golden-vector tests (12/12 green) from `analysis/tools/golden_gen.py` truth model (`analysis/tools/golden_vectors.json`), incl. direction-correct round-trips and CRC-corruption rejection.
+- [x] **Protocol correction found by tests:** device→app wire format is `xor(plaintext ‖ crc32(plaintext))`; CRC is computed over plaintext and is itself obfuscated with the rest of the stream (PROTOCOL_ANALYSIS §3 updated). app→device commands are always single-frame (≤18 B), so no CRC occurs in that direction.
+- [x] **State machines (pair/session) as code + replay tests (27/27 green):** `PairStateMachine` (connect → device-info/feature → register `0x0001` → challenge `0x0007` → auth `0x0008` → bind confirm `0x0003/0x0004` → disconnect; rejection/refusal/timeout/resend-exhaustion paths), `SessionStateMachine` (connect → notify → init `0x0009→0x000A` → config flush `0x1002/0x1001/0x1004` → live `0x00E9` → `0x4802` drain by `remainCount` → finish), `CommandQueue` (single-flight, ACK-pop, 3× resend), and a firmware-accurate `DeviceSimulator` (wire-level replay incl. XOR + plaintext-CRC packets).
+- [x] **Recorded-session replay harness (Phase 0 leftover):** `BleReplayPlayer` (test target) replays *recorded* device→app notify sequences verbatim against `PairStateMachine`/`SessionStateMachine`; capture format v1 documented in `analysis/captures/README.md`. Synthetic reference capture (`synthetic_session_capture.json`, wire bytes generated from `DeviceSimulator` semantics) + 5 replay tests prove the harness end-to-end (32/32 green). **Caveat:** synthetic captures only prove the harness — they cannot falsify wire assumptions. Real pair/weigh-in captures (experiments E1/E2, Phase 1) are the actual falsification step and drop straight into the same harness.
+- How to run tests on this machine: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` from `scalekit/` (the default `xcode-select` target is CommandLineTools, which lacks the XCTest module).
+- Exit: state machines green in replay; codec/parser already 100% green without hardware.
 
 ## Phase 1 — macOS handshake harness (Experiments E1 + E2) (week 2–3)
 - [ ] CLI host app reusing ScaleKit + CoreBleCentral: scan → connect → register → auth → bind (E1).

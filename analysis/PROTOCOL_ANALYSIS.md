@@ -66,7 +66,8 @@ bytes 2..N  : payload, XORed with the 6 bytes of the device MAC
 ```
 
 - **Packet = 1..N frames.** Frames are reassembled by serial number (`A6ProtocolParser.decodePackage`).
-- **Multi-frame packets** (frameCount > 1) end with a **CRC32** of the reassembled payload (4 bytes, appended before chunking; `DeviceDataPackage.verify()` compares `DataUtils.get_crc32_string`).
+- **Multi-frame packets** (frameCount > 1) carry a **CRC32** (poly `0xEDB88320`, init 0, xorout 0 — verified from `DataUtils.init_crc_table`) over the **plaintext** payload. On the wire the CRC is part of the obfuscated byte stream: wire = `XOR(plaintext ‖ CRC32(plaintext))`, chunked into 18-byte frames (`DeviceDataPackage.verify()` XOR-decodes the reassembled packet, then checks the trailing 4 bytes).
+- **Direction asymmetry (note):** the app→device encoder (`generateResponsePackage`) computes CRC over the *XORed* payload, but every app→device command is ≤ 18 bytes (single frame), so no CRC is ever transmitted in that direction in practice. Only device→app packets (weight records etc.) are multi-frame.
 - **ACK frame** (frameCount=0, serial=0): `[0x00, 0x01, status]`, status `0x01` = OK, `0x02` = FAIL. Sent on `A622` (app→device) / `A625` (device→app).
 - App→device commands are written to `A624`; each command is chunked into 18-byte frames; every command is ACKed by the device before the next is sent (command queue + 3 s resend timer, `FatScalePairWorker`).
 - Optional XOR obfuscation with MAC applies to both directions and is version-gated (`Security.code = "1.4.0.25"`); header bytes 0–1 are never XORed, and the first 2 payload bytes of a header frame carry the command code (see below).

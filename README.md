@@ -15,7 +15,9 @@ Reverse-engineering workspace for the **realme Link** Android app (v5.5.514.1142
 | `decompiled/smartscale/` | jadx output of `split_realmeSmartScale.apk` — **the scale BLE stack (950 classes, `com.lifesense.ble.*`)** |
 | `decompiled/base/` | jadx output of `base.apk` (22,326 classes — app shell, account, cloud glue) |
 | `analysis/` | Protocol + app-architecture + iOS-compatibility analysis |
-| `docs/` | **SRD documents — one per connected feature** (build spec for the Firefly app) |
+| `analysis/tools/` | Live BLE scanner (Swift), Python codec truth model (`golden_gen.py`) + golden vectors |
+| `scalekit/` | **ScaleKit** — Swift package implementing the A6 protocol (codec, commands, parsers), 12/12 golden tests green |
+| `docs/` | SRDs (one per feature), TDD, diagrams, feasibility, roadmap |
 
 ## Documents
 
