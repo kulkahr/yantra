@@ -1,0 +1,55 @@
+name: Firefly
+options:
+  bundleIdPrefix: app.firefly
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  ScaleKit:
+    path: ../scalekit
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: 1
+targets:
+  Firefly:
+    type: application
+    platform: iOS
+    sources: [Firefly]
+    dependencies:
+      - package: ScaleKit
+    info:
+      path: Firefly/Info.plist
+      properties:
+        CFBundleDisplayName: Firefly
+        UILaunchScreen: {}
+        NSBluetoothAlwaysUsageDescription: "Firefly connects to your realme Smart Scale to display and store your weight measurements locally on this device."
+        NSBluetoothPeripheralUsageDescription: "Firefly connects to your realme Smart Scale to display and store your weight measurements locally on this device."
+        NSHealthShareUsageDescription: "Firefly saves your body metrics to Apple Health only when you turn on Health export."
+        NSHealthUpdateUsageDescription: "Firefly saves your body metrics to Apple Health only when you turn on Health export."
+        UIBackgroundModes: [bluetooth-central]
+        ITSAppUsesNonExemptEncryption: false
+    entitlements:
+      path: Firefly/Firefly.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+  FireflyTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [FireflyTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Firefly
+schemes:
+  Firefly:
+    build:
+      targets:
+        Firefly: all
+        FireflyTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets: [FireflyTests]

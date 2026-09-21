@@ -22,17 +22,19 @@ Baseline: SRD-000…007, TDD, DIAGRAMS, FEASIBILITY_AND_UNKNOWNS (2026-09-20).
 - Exit status: **protocol fully hardware-verified end-to-end from our own Swift stack** — bind, login, config, live weigh-in streaming, and post-measurement record pull, no official app involved. Phase 1 complete.
 
 ## Phase 2 — iOS app skeleton (week 3–5)
-- [ ] CoreBleCentral adapter + permissions; foreground scan/connect (SRD-001).
-- [ ] Pair/bind UI + slot management (SRD-002).
-- [ ] Measure screen: live weight, final record, local store (SRD-003).
-- Exit: weigh-in end-to-end on iPhone, data stored locally.
+- [x] **Firefly iOS app scaffolded (`ios/`, xcodegen `project.yml` → `Firefly.xcodeproj`):** SwiftUI app targeting iOS 17, links ScaleKit via local SwiftPM; Info.plist Bluetooth usage strings, `bluetooth-central` background mode, HealthKit entitlement.
+- [x] **BLE central (`ScaleCentral.swift`)** — faithful port of the wire-verified `BleHost` pipeline: scan → connect → sequential reads → **4-CCCD subscribe gate (A620 first)** → Pair/Session machine plumbing, 3 s ACK-resend watchdog, `0x4801` arm on `.live`, mfg-data MAC parsing (reversed bytes), record collection into the local store.
+- [x] **Pair/bind UI + slot management (SRD-002):** scan list (RSSI/MAC), slot picker 1–5, bind action → `PairStateMachine`; bind record persisted (`BindStore`).
+- [x] **Measure screen (SRD-003):** live record card (weight/impedance/timestamp, numeric transitions), stage status, failure surfacing; records dedup-stored (`MeasurementStore`, key = deviceId+UTC±1s+weight per SRD-004 FR-3).
+- [x] `GATTPlus` UUIDs moved into ScaleKit (shared by a6host + iOS).
+- Exit: **BUILD SUCCEEDED + 3/3 iOS tests green** (iPhone 17 sim). On-device weigh-in validation pending hardware run (protocol layer already hardware-proven via a6host).
 
 ## Phase 3 — History, profiles, body composition (week 5–7)
-- [ ] History drain + list + trend chart (SRD-004).
-- [ ] Profile management + config pushes incl. unit/time sync (SRD-005).
-- [ ] BodyComposer v1 (formula approximation; tune vs official readings) (SRD-006).
-- [ ] CSV export; HealthKit write (opt-in) (SRD-004 FR-6).
-- Exit: parity test vs realme Link within tolerance.
+- [x] **History list + trend chart (SRD-004 FR-5):** Swift Charts `LineMark`/`PointMark` over stored records; record rows with UTC + impedance.
+- [x] **Profile management (SRD-005):** `ProfileStore` (UserDefaults-backed sex/age/height) drives both the `0x1001` user-info push (`machineProfile`) and BodyComposer (`composerProfile`); editor on the Device tab.
+- [x] **BodyComposer v1 (SRD-006, in ScaleKit — platform-neutral + unit-tested):** BMI; impedance-based fat% (openScale-style BIA regression α·h_cm²/R + β·W + γ, sex-specific); Deurenberg fallback without impedance; water/muscle/bone/soft-lean derived from FFM; Mifflin-St Jeor BMR; visceral placeholder (marked for tuning vs official readings).
+- [x] **CSV export + HealthKit write (SRD-004 FR-6):** explicit user action only (toolbar buttons), HealthKit opt-in via `requestAuthorization`, graceful unavailability.
+- Exit: suite 40/40 (ScaleKit incl. 7 BodyComposer tests) + 3/3 iOS tests. Formula tuning vs official app readings remains the standing Phase-3/4 refinement loop.
 
 ## Phase 4 — Polish & release (week 7–9)
 - [ ] Reconnect policy, error UX, low battery, DFU-mode detection (SRD-007 FR-1 only).

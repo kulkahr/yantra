@@ -2,20 +2,8 @@ import Foundation
 import CoreBluetooth
 import ScaleKit
 
-// MARK: - Extra GATT UUIDs used by the host (standard 180a characteristics)
-
-enum GATTPlus {
-    // Captured from phone-B's fresh pairing (br8): the official app enables
-    // FOUR notify channels — the challenge fired right after the 3rd CCCD
-    // (A620's indication enable). We previously subscribed only A621+A625.
-    static let a6Broadcast = UUID(uuidString: "0000A620-0000-1000-8000-00805F9B34FB")!  // 0x001b READ|INDICATE — pushes 100a broadcast-ID on connect
-    static let otaData     = UUID(uuidString: "00001531-1212-EFDE-1523-785FEABCD123")!  // 0x002f WRITE|NOTIFY — OTA/data channel
-    static let firmwareRevision = UUID(uuidString: "00002A26-0000-1000-8000-00805F9B34FB")!
-    static let hardwareRevision = UUID(uuidString: "00002A27-0000-1000-8000-00805F9B34FB")!
-    static let modelNumber      = UUID(uuidString: "00002A24-0000-1000-8000-00805F9B34FB")!
-    static let serialNumber     = UUID(uuidString: "00002A25-0000-1000-8000-00805F9B34FB")!
-    static let manufacturerName = UUID(uuidString: "00002A29-0000-1000-8000-00805F9B34FB")!
-}
+// GATTPlus (extended UUIDs incl. A620/1531 + 180a info) now lives in ScaleKit
+// so the Firefly iOS app shares the same constants.
 
 // MARK: - Output sink
 
