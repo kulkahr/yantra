@@ -5,8 +5,34 @@ synthetic `DeviceSimulator`). This folder holds captures; this file defines the 
 
 ## How to capture (experiments E1 / E2)
 
-Run the macOS CLI harness (Phase 1, `analysis/tools/`) against the physical scale and log
-every notify exactly as it arrives — unmodified. Minimal CoreBluetooth recorder loop:
+The recorder is built in: **`a6host`** (Phase 1 CLI, `scalekit/Sources/A6Host/`). It logs
+every notify exactly as it arrives — unmodified — and writes a capture on success, abort,
+timeout, or Ctrl-C.
+
+```bash
+cd scalekit
+BUILD=.build/debug/a6host
+
+# 0) wake the scale (step on it briefly), then discover + persist identity:
+$BUILD scan --duration 15
+
+# 1) E1 — full pair/bind handshake (closes unknown U1):
+$BUILD pair --slot 1 --notes "first bind from macOS"
+
+# 2) E2 — session: init → config pushes → live weigh-in → history drain (U2):
+$BUILD session --slot 1 --arm --notes "weigh-in, barefoot, compare vs realme Link"
+
+# persisted state:
+$BUILD status
+```
+
+Captures land next to this README as `pair_<timestamp>.json` / `session_<timestamp>.json`
+(git-commit them: text-only, no personal data beyond the scale's public MAC + the recording
+user's weight values — rename/scrub if that matters). To replay one against the state
+machines, drop it into `scalekit/Tests/ScaleKitTests/` and load it via
+`BleReplayPlayer.load(...)` — same schema, no conversion needed.
+
+Manual recorder reference (CoreBluetooth), if the CLI needs re-verification:
 
 ```swift
 func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error: Error?) {
@@ -18,10 +44,6 @@ func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error:
     ])
 }
 ```
-
-Save as `<name>.json` next to this README and git-commit it (captures are small, text-only,
-and contain no personal data beyond the scale's public MAC + weight values of the recording
-user — rename/scrub if that matters).
 
 ## JSON schema (v1)
 
@@ -68,5 +90,17 @@ after the 0x0007 challenge", "ACK-ok written to A622 for every assembled packet"
 
 - [x] Format defined (this file)
 - [x] `BleReplayPlayer` + synthetic-capture round-trip test (proves the harness itself)
-- [ ] Real pair capture from the physical scale (needs experiment **E1**, Phase 1)
-- [ ] Real weigh-in capture (needs experiment **E2**; will settle unknown **U2**)
+- [x] Recorder built: `a6host` CLI (scan/pair/session/replay modes, signal-safe capture save)
+- [x] **Real ground-truth capture via the official app** (2026-09-21): Android **Bluetooth HCI
+  snoop log** from the paired phone during real weigh-ins → decoded with
+  `analysis/tools/hci_decode.py` (btsnoop → A6 transcript + replay-format capture).
+  `hci/` subfolder holds the raw logs + `session_realweighin.json` (54 device→app events
+  incl. a full 45-record history drain). **Note:** that folder is gitignored (the btsnoop
+  contains the phone's Bluetooth traffic); regenerate via `hci_decode.py` from a fresh
+  bugreport if needed. This capture is the replay-harness falsification step: it exposed
+  and settled the init-response shape, 0-based measure slot, tz-code formula, and the
+  real config-push set (see FUTURE_PLAN Phase 1).
+- [ ] Direct pair capture from the Mac (`a6host pair`) — blocked on the scale's
+  introduction ritual: it never challenges an unknown BLE peer (see FUTURE_PLAN E1 notes).
+- [ ] Live-stream frame classification (**U2**): weigh-ins so far emitted final `0x4802`
+  records only; `0x00E9` live samples still unobserved on this firmware.

@@ -66,17 +66,15 @@ public enum A6Commands {
     /// `0x000A` init response: capability bitmap + optional UTC/tz/timestamp.
     /// Flags: 0x01 mtu, 0x02 slaveLatency, 0x04 supervisoryTimeout,
     ///        0x08 utc, 0x10 timeZone, 0x20 timestamp.
-    public static func responseInit(mtu: UInt8 = 20, utc: UInt32, timeZoneHex: UInt8, date: (Int, Int, Int, Int, Int, Int)) -> [UInt8] {
+    /// `0x000A` init response — **hardware-verified form (HCI capture 2026-09-21):**
+    /// the scale's `0x0009` flags `0x18` request UTC + timezone only, and the
+    /// official app answers with exactly 8 bytes: `[cmd][0x18][utc 4B][tz 1B]`.
+    /// (No MTU byte, no date-of-time stamp — those flags were never set.)
+    public static func responseInit(utc: UInt32, timeZoneHex: UInt8) -> [UInt8] {
         var p = A6Bytes.from(short: A6Command.responseInit.rawValue)
-        let flags: UInt8 = 0x01 | 0x08 | 0x10 | 0x20
-        p.append(flags)
-        p.append(mtu)
+        p.append(0x18)                       // mirrors the device's request flags
         p += A6Bytes.from(int: utc)
         p.append(timeZoneHex)
-        // timestamp: year(2B) month day hour min sec
-        p += A6Bytes.from(short: UInt16(date.0))
-        p.append(UInt8(date.1)); p.append(UInt8(date.2))
-        p.append(UInt8(date.3)); p.append(UInt8(date.4)); p.append(UInt8(date.5))
         return p
     }
 
@@ -120,8 +118,10 @@ public enum A6Commands {
     }
 
     /// `0x4801` measure setting: [cmd][slot][on 0/1]
+    /// `0x4801` measure setting — **hardware-verified (HCI capture): the slot
+    /// byte is 0-based** (`48 01 00 01` targets the first registered user).
     public static func measureSetting(slot: Int, on: Bool) -> [UInt8] {
-        A6Bytes.from(short: A6Command.measureSetting.rawValue) + [UInt8(slot), on ? 1 : 0]
+        A6Bytes.from(short: A6Command.measureSetting.rawValue) + [UInt8(slot - 1), on ? 1 : 0]
     }
 
     /// `0x1003` push target: [cmd][slot][enable 1][target×100 4B]
@@ -133,9 +133,16 @@ public enum A6Commands {
         return p
     }
 
-    /// `0x1005` clear stored data: [cmd][slot][timestamp 4B]
+    /// `0x1005` clear stored data — decompiled PacketProfile: 0x1005 =
+    /// PUSH_CLEAR_DATA (4101). NOTE: the byte after the command is a flag,
+    /// not the slot (hardware sends `10 05 00` variants as callbacks too).
     public static func clearData(slot: Int, utc: UInt32) -> [UInt8] {
         A6Bytes.from(short: A6Command.pushClearData.rawValue) + [UInt8(slot)] + A6Bytes.from(int: utc)
+    }
+
+    /// `0x1007` heart-rate switch — hardware sends `[10 07 01]` (on).
+    public static func pushHeartRateSwitch(on: Bool = true) -> [UInt8] {
+        A6Bytes.from(short: A6Command.pushHeartRateSwitch.rawValue) + [on ? 1 : 0]
     }
 }
 

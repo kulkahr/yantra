@@ -3,3 +3,5 @@ decompiled/*
 ._*
 scalekit/.build/*
 .freebuff/*
+
+analysis/captures/*

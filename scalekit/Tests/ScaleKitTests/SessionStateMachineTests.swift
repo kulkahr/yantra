@@ -43,7 +43,9 @@ final class SessionStateMachineTests: XCTestCase {
         collect(m.handle(.servicesDiscovered))
         collect(m.handle(.notifyEnabled(characteristic: GATT.notifyData)))
         collect(m.handle(.notifyEnabled(characteristic: GATT.notifyAck)))
-        XCTAssertEqual(m.phase, .awaitingInit)
+        // Bound device: machine waits for the login challenge before init.
+        // (Permissive: a direct 0x0009 is still honored — the flow below tests that.)
+        XCTAssertEqual(m.phase, .awaitingLogin)
 
         // device: init request 0x0009 (single frame)
         for f in sim.command(0x0009, body: [0b0011_1111]) {
@@ -58,9 +60,10 @@ final class SessionStateMachineTests: XCTestCase {
         written = []
 
         // Each ACK pops the head and immediately writes the next queued command.
-        for expected: UInt16 in [A6Command.pushTime.rawValue,
-                                 A6Command.pushUserInfo.rawValue,
-                                 A6Command.pushUnit.rawValue] {
+        // Hardware-verified push set (HCI capture): user-info, unit, HR-switch.
+        for expected: UInt16 in [A6Command.pushUserInfo.rawValue,
+                                 A6Command.pushUnit.rawValue,
+                                 A6Command.pushHeartRateSwitch.rawValue] {
             collect(m.handle(.notifyData(characteristic: GATT.notifyAck, data: sim.ackData())))
             XCTAssertEqual(written, [expected], "next config push must follow its predecessor's ACK")
             written = []
@@ -70,6 +73,36 @@ final class SessionStateMachineTests: XCTestCase {
         collect(m.handle(.notifyData(characteristic: GATT.notifyAck, data: sim.ackData())))
         XCTAssertEqual(m.queue.count, 0)
         XCTAssertEqual(m.phase, .live)
+    }
+
+    // MARK: - Login (bound device): 0x0007 challenge → 0x0008 response mode 0
+
+    func testLoginChallengeTriggersAuthResponseMode0() throws {
+        var m = makeMachine()
+        let sim = DeviceSimulator(mac: Self.MAC)
+        _ = m.start(); _ = m.handle(.connected); _ = m.handle(.servicesDiscovered)
+        _ = m.handle(.notifyEnabled(characteristic: GATT.notifyData))
+        _ = m.handle(.notifyEnabled(characteristic: GATT.notifyAck))
+        XCTAssertEqual(m.phase, .awaitingLogin)
+
+        // device: login challenge 0x0007 with verification code
+        var authWritten: [UInt8]?
+        for f in sim.command(0x0007, body: A6Hex.decode("AABBCCDDEEFF")) {
+            let out = m.handle(.notifyData(characteristic: GATT.notifyData, data: f))
+            for case .write(let c, let d) in out.actions where c == GATT.writeData {
+                authWritten = Array(d)
+            }
+        }
+        XCTAssertEqual(m.phase, .awaitingInit)
+        XCTAssertEqual(m.verificationCode, "AABBCCDDEEFF")
+
+        // The written bytes must be the encoded 0x0008 auth response (mode 0 = login).
+        // (20-byte ASCII-hex payload → 2 frames; compare the re-encoded packet.)
+        let d = try XCTUnwrap(authWritten)
+        let expected = A6FrameCodec().encodePacket(
+            payload: A6Commands.authResponse(success: true, verificationCodeHex6: "AABBCCDDEEFF", mode: 0),
+            mac: Self.MAC, xored: true)
+        XCTAssertEqual(d, expected)
     }
 
     func testConfigAcksDrainToLive() {

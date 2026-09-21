@@ -28,10 +28,10 @@ final class BleReplayTests: XCTestCase {
     func testLoadSyntheticCapture() throws {
         let c = try BleReplayPlayer.load(resource: "synthetic_session_capture")
         XCTAssertEqual(c.meta.kind, .session)
-        XCTAssertEqual(c.events.count, 6)
+        XCTAssertEqual(c.events.count, 7)
         // ACK notify: [00 01 30] — status 0x30 = 0x01 ^ MAC[0] (0x31), as the wire carries it
-        XCTAssertEqual(c.events[1].data, A6Hex.decode("000130"))
-        XCTAssertEqual(c.events[1].characteristic, GATT.notifyAck)
+        XCTAssertEqual(c.events[2].data, A6Hex.decode("000130"))
+        XCTAssertEqual(c.events[2].characteristic, GATT.notifyAck)
     }
 
     func testLoadRejectsMalformedCaptures() {
@@ -53,10 +53,10 @@ final class BleReplayTests: XCTestCase {
         XCTAssertEqual(machine.remainingOnScale, 0)
         XCTAssertEqual(machine.lastRecord?.weightKg ?? 0, 72.85, accuracy: 0.0001)
 
-        // Writes the host would have issued, in order: the data-ACK to A622 for
-        // the 0x0009 init request, then the 0x000A init response to A624 (whose
-        // ACK pops the queue and writes pushTime), then the data-ACK for the
-        // final 0x4802 record.
+        // Writes the host would have issued, in order: the login response 0x0008
+        // for the 0x0007 challenge, the data-ACK to A622 for the 0x0009 init
+        // request, then the 0x000A init response to A624 (whose ACK pops the
+        // queue and writes pushTime), then the data-ACK for the final 0x4802 record.
         let codec = A6FrameCodec()
         var commands: [UInt16] = []
         for case .write(let char, let data) in transcript.writes {
@@ -67,17 +67,18 @@ final class BleReplayTests: XCTestCase {
                 commands.append(UInt16(fr.payload[0]) << 8 | UInt16(fr.payload[1]))
             }
         }
-        // Single-flight drain: init response first, then each config push is
-        // written the moment its predecessor's ACK pops it (4 ACK events).
-        XCTAssertEqual(commands, [A6Command.responseInit.rawValue,
-                                  A6Command.pushTime.rawValue,
+        // Single-flight drain: login response first, then init response, then
+        // the hardware-verified push set (user-info, unit, HR-switch).
+        XCTAssertEqual(commands, [A6Command.auth.rawValue,
+                                  A6Command.responseInit.rawValue,
                                   A6Command.pushUserInfo.rawValue,
-                                  A6Command.pushUnit.rawValue])
+                                  A6Command.pushUnit.rawValue,
+                                  A6Command.pushHeartRateSwitch.rawValue])
 
         let ackCount = transcript.writes.filter {
             if case .write(let c, _) = $0 { return c == GATT.writeAck } else { return false }
         }.count
-        XCTAssertEqual(ackCount, 2, "data-ACK to A622 for 0x0009 and for the 0x4802 record")
+        XCTAssertEqual(ackCount, 3, "data-ACK to A622 for 0x0007 challenge, 0x0009 init, and the 0x4802 record")
 
         XCTAssertFalse(transcript.disconnectRequested)
     }

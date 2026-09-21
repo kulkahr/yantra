@@ -47,16 +47,23 @@ public struct PairStateMachine {
         public var userSlot: Int = 1                // USER1, per official DefaultPairCallback
         public var registerState: RegisterState = .normalUnregister
         public var maxResends: Int = 3
+        /// E1 finding: the official pairing stack only runs REQUEST_DEVICE_ID →
+        /// WRITE_REGISTER when the advertised register-status byte == 0
+        /// (ProtocolType.getPairingProtocolStack). Retail units advertise 1 and
+        /// skip straight to RECEIVE_AUTH — the challenge is device-initiated
+        /// (step-on triggers it).
+        public var skipsRegister: Bool = false
 
         public init(mac: String, firmwareVersion: String, mode: Mode = .bind,
                     userSlot: Int = 1, registerState: RegisterState = .normalUnregister,
-                    maxResends: Int = 3) {
+                    maxResends: Int = 3, skipsRegister: Bool = false) {
             self.mac = mac
             self.firmwareVersion = firmwareVersion
             self.mode = mode
             self.userSlot = userSlot
             self.registerState = registerState
             self.maxResends = maxResends
+            self.skipsRegister = skipsRegister
         }
     }
 
@@ -188,8 +195,13 @@ public struct PairStateMachine {
             if characteristic == GATT.featureInfo {
                 featureBitmap = data
             }
-            // In the official flow the app reads 180a chars first, then A641.
-            // ScaleKit keeps it minimal: one read round → go register.
+            if config.skipsRegister {
+                // Retail path (advertised register-status 1): no register command;
+                // the scale sends 0x0007 spontaneously (typically on step-on).
+                transition(to: .awaitingChallenge)
+                return Output()
+            }
+            // Factory path (register-status 0): host supplies the deviceId.
             transition(to: .awaitingDeviceIdInput)
             awaitingDeviceId = true
             return Output()   // host must call setDeviceIdInput

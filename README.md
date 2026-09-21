@@ -28,6 +28,9 @@ Reverse-engineering workspace for the **realme Link** Android app (v5.5.514.1142
 
 ## Reproduction steps
 
+> **Hardware-verified runbook: `REPLICATION.md`** — exact `a6host` commands to bind
+> a fresh scale and stream weigh-ins from the Mac (no realme app, no cloud).
+
 ```bash
 # 1. Enable USB debugging on the phone, then:
 adb devices                              # verify device

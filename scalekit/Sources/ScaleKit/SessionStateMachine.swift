@@ -1,7 +1,8 @@
 import Foundation
 
 /// Measurement-session state machine — port of `FatScaleWorker`:
-/// connect → notify → init(0x0009→0x000A) → config pushes (0x1002/0x1001/0x1004)
+/// connect → notify → login(0x0007→0x0008 mode 0) → init(0x0009→0x000A)
+/// → config pushes (0x1002/0x1001/0x1004)
 /// → live stream (0x00E9 / real-time) → final record (0x4802) →
 /// history drain (0x4802 × remainCount) → finish.
 public struct SessionStateMachine {
@@ -11,6 +12,7 @@ public struct SessionStateMachine {
         case connecting
         case discovering
         case enablingNotify
+        case awaitingLogin           // bound device: waiting for the scale's 0x0007 login challenge
         case awaitingInit            // waiting for device 0x0009
         case pushingConfig
         case live                    // armed; live frames may arrive
@@ -98,6 +100,7 @@ public struct SessionStateMachine {
     private var xored: Bool { FirmwareCompat.usesXor(config.firmwareVersion) }
 
     public private(set) var lastRecord: A6WeightRecord?
+    public private(set) var verificationCode: String?
     public private(set) var remainingOnScale: Int = 0
 
     public init(config: Config) {
@@ -135,8 +138,8 @@ public struct SessionStateMachine {
 
         case .notifyEnabled(let c):
             guard phase == .enablingNotify, c == GATT.notifyAck else { return Output() }
-            phase = .awaitingInit
-            return Output()   // device will send 0x0009
+            phase = .awaitingLogin
+            return Output()   // device will send 0x0007 (login challenge), then 0x0009
 
         case .notifyData(let characteristic, let data):
             guard characteristic == GATT.notifyData || characteristic == GATT.notifyAck else { return Output() }
@@ -237,15 +240,27 @@ public struct SessionStateMachine {
             let cmd = UInt16(payload[0]) << 8 | UInt16(payload[1])
 
             switch cmd {
+            case A6Command.receiverAuth.rawValue:
+                // Decompiled FatScaleWorker case 4/5: on the scale's login challenge,
+                // data-ACK + 0x0008 auth response with mode 0 (login, not bind/unbind).
+                guard payload.count >= 8 else { return out }
+                let code = A6Hex.encode(Array(payload[2..<8]))
+                verificationCode = code
+                let auth = A6Commands.authResponse(success: true,
+                                                   verificationCodeHex6: code, mode: 0)
+                queue.enqueue(characteristic: GATT.writeData, payload: auth, codec: codec,
+                              mac: config.mac, xored: xored)
+                phase = .awaitingInit
+                out.actions += drainQueue().actions
+
             case A6Command.receiverInit.rawValue:
-                // reply with 0x000A init response (decompiled: mtu 20, utc, tz, timestamp)
-                let initResp = A6Commands.responseInit(mtu: 20,
-                                                       utc: config.utcProvider(),
-                                                       timeZoneHex: config.timeZoneHex(),
-                                                       date: config.dateProvider())
+                // Hardware-verified: 0x0009 flags 0x18 → UTC + timezone only.
+                let initResp = A6Commands.responseInit(utc: config.utcProvider(),
+                                                      timeZoneHex: config.timeZoneHex())
                 queue.enqueue(characteristic: GATT.writeData, payload: initResp, codec: codec,
                               mac: config.mac, xored: xored)
-                // queue config pushes right after
+                // Config pushes right after (hardware parity: user-info + unit,
+                // optionally clear-data/HR-switch — no time push).
                 enqueueConfigPushes()
                 phase = .pushingConfig
                 out.actions += drainQueue().actions
@@ -293,11 +308,10 @@ public struct SessionStateMachine {
     }
 
     private mutating func enqueueConfigPushes() {
-        queue.enqueue(characteristic: GATT.writeData,
-                      payload: A6Commands.pushTime(utc: config.utcProvider(),
-                                                   timeZoneHex: config.timeZoneHex(),
-                                                   date: config.dateProvider()),
-                      codec: codec, mac: config.mac, xored: xored)
+        // Hardware-verified set (official app HCI capture, 2026-09-21):
+        // user-info → unit → HR-switch. No time push (0x000A already set UTC/tz),
+        // no clear-data push (clearing scale memory is a separate user action).
+        // The scale confirms each with a 0x1000 setting callback.
         if let p = config.profile {
             queue.enqueue(characteristic: GATT.writeData,
                           payload: A6Commands.pushUserInfo(slot: config.slot,
@@ -311,6 +325,9 @@ public struct SessionStateMachine {
         }
         queue.enqueue(characteristic: GATT.writeData,
                       payload: A6Commands.pushUnit(config.unit),
+                      codec: codec, mac: config.mac, xored: xored)
+        queue.enqueue(characteristic: GATT.writeData,
+                      payload: A6Commands.pushHeartRateSwitch(on: true),
                       codec: codec, mac: config.mac, xored: xored)
     }
 
