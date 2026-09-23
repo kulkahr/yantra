@@ -183,6 +183,38 @@ final class KahaProtocolTests: XCTestCase {
 
     // MARK: - SpO2 history (Spo2PeriodicDataRes layout)
 
+    // MARK: - Sport session (SRD-010 §9)
+
+    func testStartSportModeFrame() {
+        // Decompiled CurrentSportModeReq: {1, -117(0x8B), 6, 0} + [mode, outdoor]
+        XCTAssertEqual(KahaProtocol.startSportMode(.running),
+                       [0x01, 0x8B, 0x06, 0x00, 0x02, 0x01])
+        XCTAssertEqual(KahaProtocol.startSportMode(.walking, indoor: true),
+                       [0x01, 0x8B, 0x06, 0x00, 0x01, 0x00])
+        XCTAssertEqual(KahaProtocol.startSportMode(.cycling),
+                       [0x01, 0x8B, 0x06, 0x00, 0x03, 0x01])
+        XCTAssertEqual(KahaProtocol.startSportMode(.swimming),
+                       [0x01, 0x8B, 0x06, 0x00, 0x04, 0x01])
+    }
+
+    func testStopSportModeFrame() {
+        XCTAssertEqual(KahaProtocol.stopSportMode(),
+                       [0x01, 0x8B, 0x06, 0x00, 0x00, 0x01])
+    }
+
+    func testPauseResumeFrames() {
+        // Decompiled ActivityPauseResumetReq: PAUSE_ACTIVITY_SESSION = {1, -105(0x97), 5, 0}, flag 1=pause 2=resume
+        XCTAssertEqual(KahaProtocol.pauseSportSession(), [0x01, 0x97, 0x05, 0x00, 0x01])
+        XCTAssertEqual(KahaProtocol.resumeSportSession(), [0x01, 0x97, 0x05, 0x00, 0x02])
+    }
+
+    func testSportAckDecode() {
+        XCTAssertEqual(KahaProtocol.decodeSportAck([1]), true)
+        XCTAssertEqual(KahaProtocol.decodeSportAck([0]), false)
+        XCTAssertEqual(KahaProtocol.decodeSportAck([2]), false)
+        XCTAssertNil(KahaProtocol.decodeSportAck([]))
+    }
+
     func testSpo2HistoryDecodeSkipsInvalid() {
         // 3 slots: 95, 0xFF (invalid), 97 → 2 samples.
         let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 97], startHour: 8, day: 0)

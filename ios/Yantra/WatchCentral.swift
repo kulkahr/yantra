@@ -49,6 +49,18 @@ final class WatchCentral: NSObject, ObservableObject {
     /// Latest workout summary days pulled (#28), most recent first.
     @Published private(set) var workoutDays: [WorkoutDay] = []
 
+    /// Live sport session started from the phone (SRD-010 §9).
+    struct SportSession: Equatable {
+        let mode: KahaProtocol.SportMode
+        let indoor: Bool
+        let startedAt: Date
+        var paused: Bool = false
+    }
+    /// Non-nil while a phone-started workout is running on the watch.
+    @Published private(set) var sportSession: SportSession?
+    /// Staged start request awaiting the watch ack (currentSportMode response).
+    private var pendingSportStart: SportSession?
+
     struct WorkoutDay: Identifiable, Equatable {
         let id: Int            // daysAgo
         let steps: Int
@@ -296,6 +308,28 @@ final class WatchCentral: NSObject, ObservableObject {
                 workoutDays.insert(day, at: 0)
                 appendLog("workout day -\(day.id): \(day.steps) steps · \(Int(day.distanceMeters)) m")
             }
+        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.currentSportMode):
+            // Session start/stop ack — payload[0]=1 means the watch entered the mode.
+            if let ok = KahaProtocol.decodeSportAck(frame.payload) {
+                if ok, let pending = pendingSportStart {
+                    sportSession = pending
+                    appendLog("watch started \(pending.mode) (\(pending.indoor ? "indoor" : "outdoor")) — end it on the watch")
+                } else if !ok, sportSession != nil, pendingSportStart == nil {
+                    sportSession = nil
+                    appendLog("sport session ended")
+                    // Pull today's summary so the workout shows up in Workouts (#28).
+                    loadWorkoutDays([0])
+                } else if !ok {
+                    appendLog("watch refused sport mode (already active or unsupported)")
+                }
+                pendingSportStart = nil
+            }
+        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.activityPause):
+            if let ok = KahaProtocol.decodeSportAck(frame.payload), var session = sportSession {
+                session.paused = !ok ? session.paused : !session.paused
+                appendLog(ok ? (session.paused ? "session paused" : "session resumed") : "pause/resume rejected")
+                sportSession = session
+            }
         case (KahaProtocol.ClassId.alerts, KahaProtocol.SystemCmd.watchFaceList):
             watchFaceIds = KahaProtocol.decodeWatchFaceList(frame.payload)
             appendLog("watch faces: \(watchFaceIds.map(String.init).joined(separator: ", "))")
@@ -384,6 +418,39 @@ final class WatchCentral: NSObject, ObservableObject {
             send(KahaProtocol.requestWorkoutSummary(daysAgo: d))
         }
         appendLog("workout summaries requested: \(days)")
+    }
+
+    // MARK: - Sport session control (SRD-010 §9)
+
+    /// Start a workout on the watch (running/walking/cycling/swimming/taichi).
+    /// Watch acks `01 8B` with payload[0]=1, then shows its sport screen.
+    func startWorkout(_ mode: KahaProtocol.SportMode, indoor: Bool = false) {
+        guard sportSession == nil else {
+            appendLog("a session is already running — end it first")
+            return
+        }
+        pendingSportStart = SportSession(mode: mode, indoor: indoor, startedAt: Date())
+        send(KahaProtocol.startSportMode(mode, indoor: indoor))
+        appendLog("starting \(mode) workout…")
+    }
+
+    /// Phone-side stop: re-select mode 0; the watch acks with 0 (refused) and we
+    /// clear the session, then pull today's summary. If the watch ends it from
+    /// its own screen the same summary pull happens via the ack path.
+    func endWorkout() {
+        guard sportSession != nil else { return }
+        send(KahaProtocol.stopSportMode())
+        appendLog("ending workout…")
+    }
+
+    func pauseWorkout() {
+        guard sportSession?.paused == false else { return }
+        send(KahaProtocol.pauseSportSession())
+    }
+
+    func resumeWorkout() {
+        guard sportSession?.paused == true else { return }
+        send(KahaProtocol.resumeSportSession())
     }
 
     // MARK: - Persistence (WatchStore, SRD-010 FR-2)

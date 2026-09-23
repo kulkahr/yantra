@@ -236,6 +236,47 @@ struct WatchView: View {
 
     private var workoutsSection: some View {
         Section {
+            // Phone-started live session (SRD-010 §9).
+            if let session = watch.sportSession {
+                HStack {
+                    Image(systemName: "figure.run.circle.fill")
+                        .font(.title2).foregroundStyle(.green)
+                    VStack(alignment: .leading) {
+                        Text("\(String(describing: session.mode)) — \(session.indoor ? "indoor" : "outdoor")")
+                        Text(timerInterval: session.startedAt...Date.distantFuture,
+                             countsDown: false)
+                            .font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if session.paused {
+                        Button("Resume") { watch.resumeWorkout() }
+                    } else {
+                        Button("Pause") { watch.pauseWorkout() }
+                    }
+                }
+                Button("End workout", role: .destructive) { watch.endWorkout() }
+                Text("Ending from the watch itself is fine — the app pulls the summary either way.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else {
+                Menu("Start workout on watch") {
+                    ForEach([
+                        (KahaProtocol.SportMode.walking, "figure.walk"),
+                        (KahaProtocol.SportMode.running, "figure.run"),
+                        (KahaProtocol.SportMode.cycling, "figure.outdoor.cycle"),
+                        (KahaProtocol.SportMode.swimming, "figure.pool.swim"),
+                    ], id: \.0) { mode, icon in
+                        Button {
+                            watch.startWorkout(mode)
+                        } label: {
+                            Label("\(String(describing: mode)) (outdoor)", systemImage: icon)
+                        }
+                    }
+                    Divider()
+                    Button { watch.startWorkout(.running, indoor: true) } label: {
+                        Label("Running (indoor / treadmill)", systemImage: "figure.run.treadmill")
+                    }
+                }
+            }
             if watch.workoutDays.isEmpty {
                 Text("Pull workout day summaries from the watch.")
                     .font(.caption).foregroundStyle(.secondary)

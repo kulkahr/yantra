@@ -56,6 +56,19 @@ public enum KahaProtocol {
         public static let sleepHistory: UInt8 = 0x08    // 10-min sleep data (GET_10MIN_SLEEP_DATA)
         public static let spo2History: UInt8 = 0x26     // periodic SpO2 (GET_SPO2_PERIODIC)
         public static let todaysFitness: UInt8 = 0x2F
+        public static let currentSportMode: UInt8 = 0x8B // start/stop sport session (SET_CURRENT_SPORT_MODE)
+        public static let activityPause: UInt8 = 0x97    // pause/resume session (ACTIVITY_PAUSE)
+    }
+
+    /// Sport modes for `SET_CURRENT_SPORT_MODE` (`CurrentSportModeReq.isRunning()`
+    /// mapping: running→2, swimming→4, cycling→3, walking→1, taichi→5, else 0).
+    public enum SportMode: UInt8 {
+        case none = 0
+        case walking = 1
+        case running = 2
+        case cycling = 3
+        case swimming = 4
+        case taichi = 5
     }
 
     public enum LiveCmd {
@@ -599,6 +612,41 @@ public enum KahaProtocol {
     /// Workout summary request `01 23`: days-ago byte (`GetActivitySummaryReq`).
     public static func requestWorkoutSummary(daysAgo: Int) -> [UInt8] {
         frame(classId: ClassId.fitness, cmdId: 0x23, payload: [UInt8(daysAgo)])
+    }
+
+    // MARK: - Sport session (CurrentSportModeReq / ActivityPauseResumetReq)
+
+    /// Start a workout on the watch: `01 8B 06 00 [mode, indoorFlag]`
+    /// (`CurrentSportModeReq.a()`: mode byte + `!isIndoor ? 1 : 0` — 1 = outdoor).
+    /// The watch acks `01 8B …` with payload[0] = 1 on success
+    /// (`CurrentSportModesRes.isSuccess`). Note the watch then enters the sport
+    /// screen; ending is confirmed on the watch itself, matching the official app.
+    public static func startSportMode(_ mode: SportMode, indoor: Bool = false) -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.currentSportMode,
+              payload: [mode.rawValue, indoor ? 0 : 1])
+    }
+
+    /// Phone-side stop: select mode 0 (`SportMode.none`), same command shape.
+    public static func stopSportMode() -> [UInt8] {
+        startSportMode(.none, indoor: false)
+    }
+
+    /// Pause the running session `01 97 05 00 01` (`ActivityPauseResumetReq`,
+    /// flag 1 = pause). Ack `01 97 …` payload[0] = 1 = success.
+    public static func pauseSportSession() -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.activityPause, payload: [1])
+    }
+
+    /// Resume the paused session `01 97 05 00 02` (flag 2 = resume).
+    public static func resumeSportSession() -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.activityPause, payload: [2])
+    }
+
+    /// Shared success-ack decoder for `01 8B` / `01 97` responses
+    /// (`payload[0] == 1`, per `CurrentSportModesRes`/`ActivityPauseResumeRes`).
+    public static func decodeSportAck(_ payload: [UInt8]) -> Bool? {
+        guard let first = payload.first else { return nil }
+        return first == 1
     }
 
     // MARK: - Helpers
