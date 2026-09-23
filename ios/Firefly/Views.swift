@@ -482,6 +482,9 @@ struct DeviceView: View {
                 LabeledRow("Slot", "\(rec.slot)")
                 LabeledRow("Firmware", rec.firmwareVersion)
                 LabeledRow("Bound", rec.boundAt.formatted(date: .abbreviated, time: .shortened))
+                NavigationLink("Firmware update…") {
+                    FirmwareUpdateView(central: central)
+                }
             } else {
                 Label("No scale bound yet", systemImage: "link.badge.plus")
                     .foregroundStyle(.secondary)
@@ -705,6 +708,88 @@ private struct PersonEditorView: View {
                 }
             }
         }
+    }
+}
+
+/// Firmware update (SRD-007): pick a user-supplied Lifesense OTA file, review
+/// the parsed image, and flash it to a scale in update mode (LsDfu…).
+struct FirmwareUpdateView: View {
+    @ObservedObject var central: ScaleCentral
+    @Environment(\.dismiss) private var dismiss
+    @State private var showFilePicker = false
+    @State private var pickedURL: URL?
+    @State private var imageSummary: String?
+    @State private var confirmed = false
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("How updating works") {
+                    Text("1. Get the official firmware file (.bin) for your scale — "
+                         + "realme does not publish these; Firefly never downloads them.")
+                    Text("2. Trigger update mode: the scale reboots into its bootloader "
+                         + "on its own and advertises as \"LsDfu…\".")
+                    Text("3. Firefly transfers and validates the image. Keep the phone "
+                         + "close and the scale still — losing power mid-update can "
+                         + "brick the scale.")
+                        .foregroundStyle(.orange)
+                }
+                Section("Firmware file") {
+                    Button("Choose .bin file…") { showFilePicker = true }
+                    if let summary = imageSummary {
+                        Text(summary).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if imageSummary != nil {
+                    Section {
+                        Toggle("I understand an interrupted update may brick the scale",
+                               isOn: $confirmed)
+                        Button("Start update") {
+                            if let url = pickedURL {
+                                central.startDfuUpdate(fileURL: url, checkModel: "LS213-B")
+                            }
+                        }
+                        .disabled(!confirmed)
+                    }
+                }
+                if let p = central.dfuProgress {
+                    Section("Progress") {
+                        ProgressView(value: Double(p.percent), total: 100) {
+                            Text("\(p.percent) %")
+                        }
+                        Text(String(describing: p.phase)).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if let msg = central.dfuFinished {
+                    Section { Text(msg) }
+                }
+                Section("Log") {
+                    ForEach(central.log.suffix(8).reversed(), id: \.self) { line in
+                        Text(line).font(.system(size: 11, design: .monospaced))
+                    }
+                }
+            }
+            .navigationTitle("Firmware update")
+            .navigationBarTitleDisplayMode(.inline)
+            .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.data])
+            { result in
+                if case .success(let url) = result {
+                    pickedURL = url
+                    imageSummary = Self.summarize(url)
+                }
+            }
+        }
+    }
+
+    /// Parse the picked file with the ScaleKit container parser for a preview.
+    static func summarize(_ url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url),
+              let img = try? DfuImage.parse([UInt8](data)) else {
+            return "File could not be parsed as a Lifesense OTA container."
+        }
+        let bins = img.bins.map { "\($0.type.rawValue) \($0.version) (\($0.size) B)" }
+            .joined(separator: ", ")
+        return "Container \(img.version) · bins: \(bins) · \(img.allBinSize) bytes to send."
     }
 }
 

@@ -27,6 +27,9 @@ final class ScaleCentral: NSObject, ObservableObject {
     @Published private(set) var lastRecord: MeasurementRecord?
     @Published private(set) var recordCount = 0
     @Published private(set) var log: [String] = []
+    /// DFU transfer progress (nil = no update running).
+    @Published private(set) var dfuProgress: DfuStateMachine.Progress?
+    @Published private(set) var dfuFinished: String?
 
     struct DiscoveredScale: Identifiable, Equatable {
         let id: UUID
@@ -55,9 +58,13 @@ final class ScaleCentral: NSObject, ObservableObject {
     /// so later sessions can `retrievePeripherals(withIdentifiers:)` directly.
     private var pendingBind: (scaleId: UUID, slot: Int)?
 
-    private enum Flow { case pair(slot: Int), session(slot: Int, arm: Bool) }
+    private enum Flow: Equatable { case pair(slot: Int), session(slot: Int, arm: Bool), dfu }
     private var flow: Flow?
     private var pairMachine: PairStateMachine?
+    private var dfuMachine: DfuStateMachine?
+    /// DFU-mode peripherals advertise `LsD…`/`LsDfu…` names (decompiled
+    /// `isUpgradeModelDevice`) — scan matches on this prefix.
+    private var dfuScanActive = false
     private var sessionMachine: SessionStateMachine?
     private var watchdog: DispatchSourceTimer?
     private let watchdogQueue = DispatchQueue(label: "firefly.watchdog")
@@ -165,8 +172,49 @@ final class ScaleCentral: NSObject, ObservableObject {
         disconnectRequested = false
         pairMachine = nil
         sessionMachine = nil
+        dfuMachine = nil
         pendingArm = false
         sessionSlot = nil
+    }
+
+    // MARK: - Firmware update (SRD-007)
+
+    /// Starts a DFU update with a user-supplied firmware file. The scale must
+    /// be in update mode (rebooted into DFU by the device itself — its
+    /// advertisement name then starts with `LsD`/`LsDfu`).
+    func startDfuUpdate(fileURL: URL, checkModel: String) {
+        guard bluetoothOn else {
+            stage = .failed("Bluetooth is off"); return
+        }
+        guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else {
+            stage = .failed("Firmware file unreadable"); return
+        }
+        do {
+            let img = try DfuImage.parse([UInt8](data))
+            appendLog(String(format: "firmware file: %@ · bins %@ · %d bytes to transfer",
+                             img.version.isEmpty ? "?" : img.version,
+                             img.bins.map(\.type.rawValue).joined(separator: "+"),
+                             img.allBinSize))
+            var m = DfuStateMachine(image: img, checkModel: checkModel)
+            _ = m.start()                      // phase = .connecting; connect happens post-scan
+            resetLinkState()                   // clears machines — set ours after
+            dfuMachine = m
+            flow = .dfu
+            dfuScanActive = true
+            dfuProgress = m.progress
+            dfuFinished = nil
+            startScan()
+            stage = .connecting
+            appendLog("scanning for scale in update mode (LsDfu…) — press update on the scale if it has not rebooted yet")
+        } catch let e as DfuImage.ParseError {
+            switch e {
+            case .tooSmall(let n): stage = .failed("Firmware file too small (\(n) bytes)")
+            case .badMagic: stage = .failed("Not a Lifesense OTA container (bad magic)")
+            case .emptyImage: stage = .failed("Firmware container has no images")
+            }
+        } catch {
+            stage = .failed("Firmware parse error")
+        }
     }
 
     private func beginReadsIfNeeded() {
@@ -287,8 +335,8 @@ final class ScaleCentral: NSObject, ObservableObject {
             sessionMachine = m
             pendingArm = arm
             appendLog("session machine started (fw \(effectiveFw))")
-        case nil:
-            break
+        case .dfu, nil:
+            break   // DFU is dispatched through dfuDrive, not tryStartMachine
         }
         if stage != .paired { stage = .handshaking }
         syncWatchdog()
@@ -434,6 +482,43 @@ final class ScaleCentral: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - DFU dispatch
+
+    /// Feeds an event to the DFU state machine and performs its actions.
+    private func dfuDrive(_ event: LinkEvent) {
+        guard var m = dfuMachine else { return }
+        let out = m.handle(event)
+        dfuMachine = m
+        dfuProgress = out.progress
+        for a in out.actions {
+            switch a {
+            case .write(let uuid, let data):
+                perform(.write(characteristic: uuid, data: data))
+            case .disconnect:
+                perform(.disconnect)
+            default:
+                break
+            }
+        }
+        if out.finished {
+            dfuFinished = "Update complete — scale is rebooting into the new firmware."
+            dfuProgress = m.progress
+            appendLog("DFU ✓ \(dfuFinished!)")
+            flow = nil
+            dfuMachine = nil
+            dfuScanActive = false
+            if let p = peripheral { central.cancelPeripheralConnection(p) }
+            stage = .idle
+        } else if case .failed(let msg) = m.phase {
+            dfuFinished = "Update failed: \(msg)"
+            appendLog("DFU ✗ \(msg)")
+            flow = nil
+            dfuMachine = nil
+            dfuScanActive = false
+            stage = .idle
+        }
+    }
+
     // MARK: - Actions
 
     private func performAll(_ actions: [LinkAction]) {
@@ -471,6 +556,8 @@ final class ScaleCentral: NSObject, ObservableObject {
         case GATT.writeAck: return "A622"
         case GATTPlus.a6Broadcast: return "A620"
         case GATTPlus.otaData: return "1531"
+        case DfuGATT.packet: return "1532"
+        case DfuGATT.version: return "1534"
         case GATT.featureInfo: return "A641"
         case GATT.voltage: return "A640"
         case GATTPlus.firmwareRevision: return "2A26"
@@ -545,6 +632,17 @@ extension ScaleCentral: CBCentralManagerDelegate {
             central.connect(peripheral)
             return
         }
+        // DFU mode: scale reboots into its bootloader and advertises as
+        // LsD…/LsDfu… (decompiled isUpgradeModelDevice) — connect on sight.
+        if dfuScanActive, flow == .dfu, peripheral.state != .connected,
+           let n = name, n.hasPrefix("LsD") {
+            central.stopScan()
+            self.peripheral = peripheral
+            peripheral.delegate = self
+            central.connect(peripheral)
+            appendLog("update-mode scale found: \(n)")
+            return
+        }
         let entry = DiscoveredScale(id: peripheral.identifier, name: name ?? "Scale",
                                     mac: mac, rssi: RSSI.intValue)
         upsertScanEntry(entry)
@@ -553,6 +651,11 @@ extension ScaleCentral: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         appendLog("GATT connected — discovering services")
         stage = .handshaking
+        if flow == .dfu {
+            dfuDrive(.connected)
+            peripheral.discoverServices([cbuuid(DfuGATT.service)])
+            return
+        }
         peripheral.discoverServices([cbuuid(GATT.a6Service), cbuuid(GATT.deviceInfoService)])
     }
 
@@ -583,6 +686,12 @@ extension ScaleCentral: CBPeripheralDelegate {
             return
         }
         for s in peripheral.services ?? [] {
+            if flow == .dfu {
+                peripheral.discoverCharacteristics(
+                    [DfuGATT.controlPoint, DfuGATT.packet, DfuGATT.version].map(cbuuid),
+                    for: s)
+                continue
+            }
             peripheral.discoverCharacteristics(
                 [GATT.notifyData, GATT.notifyAck, GATT.writeData, GATT.writeAck,
                  GATTPlus.a6Broadcast, GATTPlus.otaData,
@@ -603,6 +712,10 @@ extension ScaleCentral: CBPeripheralDelegate {
             chars[f(c.uuid)] = c
         }
         discoveredServices.insert(f(service.uuid))
+        if flow == .dfu {
+            dfuDrive(.servicesDiscovered)
+            return
+        }
         beginReadsIfNeeded()
     }
 
@@ -613,6 +726,10 @@ extension ScaleCentral: CBPeripheralDelegate {
             return
         }
         notifiesEnabled.insert(f(characteristic.uuid))
+        if flow == .dfu {
+            dfuDrive(.notifyEnabled(characteristic: f(characteristic.uuid)))
+            return
+        }
         tryStartMachine()
     }
 
@@ -646,6 +763,10 @@ extension ScaleCentral: CBPeripheralDelegate {
         guard error == nil, let v = characteristic.value else { return }
         let hex = v.map { String(format: "%02X", $0) }.joined()
         appendLog("← \(shortName(u)) \(hex)")
+        if flow == .dfu {
+            dfuDrive(.notifyData(characteristic: u, data: [UInt8](v)))
+            return
+        }
         // A620/1531 frames are informational on this firmware; protocol lives on A621/A625.
         guard u == GATT.notifyData || u == GATT.notifyAck else { return }
         dispatch(.notifyData(characteristic: u, data: [UInt8](v)))
