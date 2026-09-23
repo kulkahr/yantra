@@ -71,3 +71,62 @@ on the factory register path).
 `xcodebuild -scheme Firefly` (iOS Simulator) — BUILD SUCCEEDED.
 On-device retest: step off the scale → Scan → Bind (slot 1) → expect `A624 1004…` (0x0003
 bind notice), `A621 1003…` (bind result = 1) and "BOUND ✓ deviceId D80BCB1B0631".
+
+## 3. People store a name but not sex/age/height — FIXED ✅
+
+`Person` now carries a **required** profile (`sexMale`, `age`, `heightCm`) plus an optional
+`targetWeightKg` (SRD-008 §5). `PersonStore.add(name:profile:preferredSlot:)` requires it;
+a backward-compatible `init(from:)` fills defaults for existing `people.json`. The person
+editor edits sex/age/height directly (no "custom profile" toggle), and body composition
+uses the **record owner's** profile (falls back to the global profile for unassigned records).
+
+## 4. No SRD for multi-person support — FIXED ✅
+
+Added `docs/SRD-008-Multi-Person-Assignment.md`: model, attribution rules (active-person
++ freshness window vs drained records), History assignment flow, requirements and
+acceptance criteria.
+
+## 5. History does not follow the active person — FIXED ✅
+
+History now has a **scope** (follow-active / all / pinned person) and **defaults to
+follow-active**: opening the History tab shows the active person's records; the toolbar
+menu still allows "All records" or pinning any person. Trend chart points are colored by
+person.
+
+## 6. Session drain auto-assigns all pulled records to the current person — FIXED ✅
+
+`collectRecords` now applies a **10-minute freshness window** against each record's own
+UTC: a record measured now (session live, active person set) is attributed to the active
+person; anything older — offline weigh-ins by someone else — is drained **unassigned** and
+surfaced in History's "N unassigned weight(s) — tap to assign" flow (log shows "· drained").
+
+## 7. Official app shows different body-composition parameters — FIXED ✅
+
+Verified against the decompiled official app (`DataParseUtils.parseWeightDataForA6`,
+`WeightData_A3` bean) and a hardware capture: the LS213-B `0x4802` record carries only
+weight + UTC + impedance (flags `0x00014008`) — **the scale never sends composition**;
+the official app computes it cloud/client-side (exact coefficients are not extractable).
+`BodyComposer` now exposes the parameters the official app shows: BMI, **fat %**, **fat
+mass (kg)**, water %, **muscle kg + muscle %**, fat-free, soft-lean, bone, **protein (kg)**,
+BMR, visceral level. The Measure tab shows a composition grid for the latest weigh-in.
+Formulas remain documented approximations — SRD-006 FR-6 (±0.1 % fat vs official) still
+needs an on-scale comparison pass to tune coefficients.
+
+## 8. Firmware shows 1.5.0.0 instead of the real version — FIXED ✅
+
+**Root cause:** CoreBluetooth delivers **read results through
+`peripheral(_:didUpdateValueFor:error:)`** — `peripheral(_:didReadValueFor:error:)` never
+fires on iOS. Both hosts (`ScaleCentral` and a6host `BleHost`) populated `readResults`
+only from `didReadValueFor`, so the `2A26` value (your log literally shows `312E342E302E343200`
+= `"1.4.0.42"` arriving) was discarded and every host fell back to the `1.5.0.0` default —
+which silently selects the wrong XOR-variant gate.
+
+**Fix:** read results are routed through the pending-read pipeline from
+`didUpdateValueFor` (dead `didReadValueFor` delegate removed from `ScaleCentral`; same fix
+in a6host `BleHost`). Pair log now shows `pair machine started (fw 1.4.0.42)` and the
+XOR-variant selection matches the bind-time value.
+
+---
+
+**Verification for #3–#8:** ScaleKit `swift test` 40/40 green; Firefly `xcodebuild build`
++ `-only-testing:FireflyTests test` — 8/8 tests green, zero warnings.

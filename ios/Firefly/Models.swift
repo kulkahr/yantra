@@ -136,12 +136,57 @@ struct Person: Identifiable, Codable, Equatable {
     var name: String
     /// Scale user slot claimed by this person (1...5).
     var slot: Int
-    /// Per-person profile for the 0x1001 user-info push; nil fields fall back
-    /// to the global ProfileStore values.
-    var sexMale: Bool?
-    var age: Int?
-    var heightCm: Double?
+    /// Profile pushed as 0x1001 user-info and used for body composition
+    /// (issue #3 — every person carries their own sex/age/height).
+    var sexMale: Bool
+    var age: Int
+    var heightCm: Double
+    /// Weight goal (kg) shown against the trend; nil = no goal set.
+    var targetWeightKg: Double?
     var createdAt: Date = Date()
+
+    init(id: UUID = UUID(), name: String, slot: Int, sexMale: Bool,
+         age: Int, heightCm: Double, targetWeightKg: Double? = nil, createdAt: Date = Date()) {
+        self.id = id
+        self.name = name
+        self.slot = slot
+        self.sexMale = sexMale
+        self.age = age
+        self.heightCm = heightCm
+        self.targetWeightKg = targetWeightKg
+        self.createdAt = createdAt
+    }
+
+    /// Backward-compatible decode: older people.json stored optional profile
+    /// fields (nil = unset). Fill them from sensible defaults so existing
+    /// installs keep working (issue #3 upgrade path).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try c.decode(String.self, forKey: .name)
+        slot = try c.decode(Int.self, forKey: .slot)
+        sexMale = try c.decodeIfPresent(Bool.self, forKey: .sexMale) ?? true
+        age = try c.decodeIfPresent(Int.self, forKey: .age) ?? 33
+        heightCm = try c.decodeIfPresent(Double.self, forKey: .heightCm) ?? 175
+        targetWeightKg = try c.decodeIfPresent(Double.self, forKey: .targetWeightKg)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(name, forKey: .name)
+        try c.encode(slot, forKey: .slot)
+        try c.encode(sexMale, forKey: .sexMale)
+        try c.encode(age, forKey: .age)
+        try c.encode(heightCm, forKey: .heightCm)
+        try c.encodeIfPresent(targetWeightKg, forKey: .targetWeightKg)
+        try c.encode(createdAt, forKey: .createdAt)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, slot, sexMale, age, heightCm, targetWeightKg, createdAt
+    }
 }
 
 /// Thread-safe local JSON store for people (Application Support/Firefly/people.json).
@@ -187,16 +232,19 @@ final class PersonStore: ObservableObject {
 
     var slotsInUse: Set<Int> { Set(people.map(\.slot)) }
 
-    /// Adds a person, claiming `preferredSlot` or — when it is taken/out of
-    /// range — the lowest free slot 1...5. Returns nil when all 5 slots are in
-    /// use (scale limit: one user per slot).
+    /// Adds a person with their required profile, claiming `preferredSlot` or —
+    /// when it is taken/out of range — the lowest free slot 1...5. Returns nil
+    /// when all 5 slots are in use (scale limit: one user per slot).
     @discardableResult
-    func add(name: String, preferredSlot: Int? = nil) -> Person? {
+    func add(name: String, profile: (sexMale: Bool, age: Int, heightCm: Double),
+             preferredSlot: Int? = nil) -> Person? {
         let used = slotsInUse
         let slot = preferredSlot.flatMap { !used.contains($0) && (1...5).contains($0) ? $0 : nil }
             ?? (1...5).first { !used.contains($0) }
         guard let slot else { return nil }
-        let p = Person(name: name, slot: slot)
+        let p = Person(name: name, slot: slot,
+                       sexMale: profile.sexMale, age: profile.age,
+                       heightCm: profile.heightCm)
         var all = people
         all.append(p)
         all.sort { $0.slot < $1.slot }
@@ -210,13 +258,14 @@ final class PersonStore: ObservableObject {
         mutate(person.id) { $0.name = name }
     }
 
-    /// Sets (or clears, when nil) the per-person profile fields used in the
-    /// 0x1001 user-info push.
-    func updateProfile(_ person: Person, sexMale: Bool?, age: Int?, heightCm: Double?) {
+    /// Persists the person's profile (0x1001 user-info push + composition).
+    func updateProfile(_ person: Person, sexMale: Bool, age: Int, heightCm: Double,
+                       targetWeightKg: Double?? = nil) {
         mutate(person.id) {
             $0.sexMale = sexMale
             $0.age = age
             $0.heightCm = heightCm
+            if let tw = targetWeightKg { $0.targetWeightKg = tw }
         }
     }
 

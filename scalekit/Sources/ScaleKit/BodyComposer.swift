@@ -36,11 +36,18 @@ public enum BodyComposer {
     public struct Composition: Equatable {
         public let bmi: Double
         public let fatPercent: Double
+        /// Fat mass in kg (issue #7).
+        public let fatMassKg: Double
         public let waterPercent: Double
         public let muscleKg: Double
+        /// Skeletal-muscle percentage of body weight (issue #7).
+        public let musclePercent: Double
         public let fatFreeKg: Double
         public let softLeanKg: Double
         public let boneKg: Double
+        /// Protein ≈ 16 % of fat-free mass (issue #7; typical body-protein share
+        /// of FFM, tune vs official readings later).
+        public let proteinKg: Double
         public let basalMetabolismKcal: Int
         public let visceralFatLevel: Double
         /// `false` when fat% came from the BMI fallback (no impedance available).
@@ -76,6 +83,7 @@ public enum BodyComposer {
         let bone = 0.055 * fatFree
         let muscle = (profile.sexMale ? 0.50 : 0.45) * fatFree
         let softLean = fatFree - bone
+        let protein = 0.16 * fatFree
 
         let bmr = profile.sexMale
             ? 10 * weightKg + 6.25 * (h * 100) - 5 * Double(age) + 5
@@ -87,11 +95,14 @@ public enum BodyComposer {
         return Composition(
             bmi: bmi,
             fatPercent: fatPercent,
+            fatMassKg: fatMass,
             waterPercent: waterPercent,
             muscleKg: muscle,
+            musclePercent: weightKg > 0 ? muscle / weightKg * 100 : 0,
             fatFreeKg: fatFree,
             softLeanKg: max(softLean, 0),
             boneKg: bone,
+            proteinKg: protein,
             basalMetabolismKcal: Int(bmr.rounded()),
             visceralFatLevel: (vfl * 10).rounded() / 10,
             impedanceBased: impedanceBased)

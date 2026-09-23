@@ -76,13 +76,14 @@ final class ModelTests: XCTestCase {
         let dir = tempDir()
         let store = PersonStore(directory: dir)
         defer { try? FileManager.default.removeItem(at: dir) }
+        let prof = (sexMale: true, age: 30, heightCm: 170.0)
 
-        let a = store.add(name: "Alice")
+        let a = store.add(name: "Alice", profile: prof)
         XCTAssertEqual(a?.slot, 1, "first person claims slot 1")
-        let b = store.add(name: "Bob", preferredSlot: 3)
+        let b = store.add(name: "Bob", profile: prof, preferredSlot: 3)
         XCTAssertEqual(b?.slot, 3)
         // A taken preferred slot falls back to the lowest free slot (documented).
-        let c = store.add(name: "Cain", preferredSlot: 3)
+        let c = store.add(name: "Cain", profile: prof, preferredSlot: 3)
         XCTAssertEqual(c?.slot, 2, "taken preferred slot falls back to next free")
         XCTAssertNil(store.person(inSlot: 4))
         XCTAssertEqual(store.person(inSlot: 3)?.name, "Bob")
@@ -99,11 +100,11 @@ final class ModelTests: XCTestCase {
         XCTAssertNil(store.person(inSlot: 3), "slot freed on remove")
 
         // Five-person scale limit: Bob's removal freed slot 3 → 3, 4, 5 free.
-        XCTAssertEqual(store.add(name: "D")?.slot, 3)
-        XCTAssertEqual(store.add(name: "E")?.slot, 4)
-        XCTAssertEqual(store.add(name: "F")?.slot, 5)
-        XCTAssertNil(store.add(name: "G"), "no free slot left")
-        XCTAssertNil(store.add(name: "H", preferredSlot: 9), "out-of-range slot rejected")
+        XCTAssertEqual(store.add(name: "D", profile: prof)?.slot, 3)
+        XCTAssertEqual(store.add(name: "E", profile: prof)?.slot, 4)
+        XCTAssertEqual(store.add(name: "F", profile: prof)?.slot, 5)
+        XCTAssertNil(store.add(name: "G", profile: prof), "no free slot left")
+        XCTAssertNil(store.add(name: "H", profile: prof, preferredSlot: 9), "out-of-range slot rejected")
     }
 
     func testPersonStorePersists() {
@@ -111,12 +112,14 @@ final class ModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let store = PersonStore(directory: dir)
-        _ = store.add(name: "Alice", preferredSlot: 2)
+        _ = store.add(name: "Alice", profile: (sexMale: false, age: 28, heightCm: 165),
+                      preferredSlot: 2)
 
         let reloaded = PersonStore(directory: dir)
         XCTAssertEqual(reloaded.people.count, 1)
         XCTAssertEqual(reloaded.people.first?.name, "Alice")
         XCTAssertEqual(reloaded.people.first?.slot, 2)
+        XCTAssertEqual(reloaded.people.first?.age, 28, "profile persisted")
         XCTAssertEqual(reloaded.activePerson?.name, "Alice", "active pointer restored")
     }
 
@@ -124,7 +127,7 @@ final class ModelTests: XCTestCase {
         let dev = "d80bcb1b0631"
         let personId = UUID()
         let m = makeRecord(deviceId: dev, personId: personId)
-        var p = Person(name: "Alice", slot: 1)
+        var p = Person(name: "Alice", slot: 1, sexMale: true, age: 30, heightCm: 170)
         p.id = personId
         let csv = CSVExporter.export(records: [m], people: [p])
         XCTAssertTrue(csv.hasPrefix("utc,weight_kg,impedance_ohm,device_id,slot,person\n"))
@@ -136,7 +139,7 @@ final class ModelTests: XCTestCase {
     func testCSVExportNameCommaQuoting() {
         let personId = UUID()
         let m = makeRecord(personId: personId)
-        var p = Person(name: "Doe, Jane", slot: 1)
+        var p = Person(name: "Doe, Jane", slot: 1, sexMale: false, age: 30, heightCm: 170)
         p.id = personId
         let csv = CSVExporter.export(records: [m], people: [p])
         XCTAssertTrue(csv.contains("\"Doe, Jane\""), "names with commas must be quoted")

@@ -65,15 +65,14 @@ final class ScaleCentral: NSObject, ObservableObject {
     /// (wire fact #5 — records only flow after start-measurement).
     private var pendingArm = false
 
-    /// Profile for the user-info push (0x1001) — the ACTIVE person's metrics,
-    /// falling back to the global ProfileStore for unset fields / no person.
+    /// Profile for the user-info push (0x1001) and body composition — the
+    /// ACTIVE person's own metrics (every person carries a full profile, #3).
     var profile: SessionStateMachine.UserProfile {
-        let defaults = ProfileStore.shared
-        guard let p = PersonStore.shared.activePerson else { return defaults.machineProfile }
+        guard let p = PersonStore.shared.activePerson else {
+            return ProfileStore.shared.machineProfile
+        }
         return SessionStateMachine.UserProfile(
-            sexMale: p.sexMale ?? defaults.sexMale,
-            age: p.age ?? defaults.age,
-            heightMeters: (p.heightCm ?? defaults.heightCm) / 100)
+            sexMale: p.sexMale, age: p.age, heightMeters: p.heightCm / 100)
     }
 
     // MARK: - Public API
@@ -373,17 +372,30 @@ final class ScaleCentral: NSObject, ObservableObject {
     private func collectRecords(_ out: SessionStateMachine.Output) {
         guard let deviceId = BindStore.shared.record?.deviceId else { return }
         let slot = sessionSlot ?? BindStore.shared.record?.slot ?? 1
-        // Weigh-ins are attributed to the ACTIVE person chosen at session start
-        // (nil when nobody is active — History then asks who each record is for).
-        let personId = PersonStore.shared.activePersonId
+        // Issue #6: only records measured NOW belong to the active person.
+        // Records drained from scale memory (weighed while disconnected —
+        // possibly by someone else) carry their own UTC and must not be
+        // silently attributed to whoever happens to be active now; they stay
+        // unassigned for the History assignment flow. Freshness window:
+        // 10 min (weigh-in ≤ a few minutes + clock drift).
+        let activePersonId = PersonStore.shared.activePersonId
+        let now = Date()
         for rec in out.measurements {
-            let stored = MeasurementRecord(deviceId: deviceId, slot: slot,
-                                           personId: personId, from: rec)
+            // Fresh weigh-in (≤10 min old) → active person; anything older is
+            // a drained memory record → unassigned, user chooses in History.
+            var stored = MeasurementRecord(deviceId: deviceId, slot: slot,
+                                           personId: activePersonId,
+                                           from: rec)
+            let fresh = now.timeIntervalSince(stored.utc) <= 600
+                && stored.utc <= now.addingTimeInterval(60)
+            if !fresh { stored.personId = nil }
             if MeasurementStore.shared.insert(stored) {
                 recordCount += 1
                 lastRecord = stored
-                appendLog(String(format: "✔ %.2f kg (impedance %@)",
-                                 rec.weightKg, rec.impedanceOhm.map(String.init) ?? "-"))
+                appendLog(String(format: "✔ %.2f kg%@ (impedance %@)",
+                                 rec.weightKg,
+                                 fresh ? "" : " · drained",
+                                 rec.impedanceOhm.map(String.init) ?? "-"))
             }
         }
     }
@@ -446,6 +458,13 @@ final class ScaleCentral: NSObject, ObservableObject {
         case GATT.writeAck: return "A622"
         case GATTPlus.a6Broadcast: return "A620"
         case GATTPlus.otaData: return "1531"
+        case GATT.featureInfo: return "A641"
+        case GATT.voltage: return "A640"
+        case GATTPlus.firmwareRevision: return "2A26"
+        case GATTPlus.hardwareRevision: return "2A27"
+        case GATTPlus.modelNumber: return "2A24"
+        case GATTPlus.serialNumber: return "2A25"
+        case GATTPlus.manufacturerName: return "2A29"
         default: return String(uuid.uuidString.prefix(4))
         }
     }
@@ -584,21 +603,6 @@ extension ScaleCentral: CBPeripheralDelegate {
         tryStartMachine()
     }
 
-    @objc(peripheral:didReadValueForCharacteristic:error:)
-    func peripheral(_ peripheral: CBPeripheral, didReadValueFor characteristic: CBCharacteristic, error: Error?) {
-        let u = f(characteristic.uuid)
-        if error == nil, let v = characteristic.value {
-            readResults[u] = v
-        }
-        pendingReads.removeAll { $0 == u }
-        if !pendingReads.isEmpty, let c = chars[pendingReads[0]] {
-            peripheral.readValue(for: c)
-        } else {
-            readsComplete = true
-            tryStartMachine()
-        }
-    }
-
     @objc(peripheral:didWriteValueForCharacteristic:error:)
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
         if let e = error {
@@ -608,8 +612,25 @@ extension ScaleCentral: CBPeripheralDelegate {
 
     @objc(peripheral:didUpdateValueForCharacteristic:error:)
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil, let v = characteristic.value else { return }
         let u = f(characteristic.uuid)
+        // READ RESULTS ALSO LAND HERE (observed on iOS 26 — the fw value arrived
+        // via didUpdateValueFor while didReadValueFor never fired, leaving
+        // readResults empty and the XOR-variant fw stuck at the 1.5.0.0 default;
+        // issue #8). Route pending-read values through the read pipeline first.
+        if pendingReads.contains(u) {
+            if error == nil, let v = characteristic.value {
+                readResults[u] = v
+            }
+            pendingReads.removeAll { $0 == u }
+            if !pendingReads.isEmpty, let c = chars[pendingReads[0]] {
+                peripheral.readValue(for: c)
+            } else {
+                readsComplete = true
+                tryStartMachine()
+            }
+            return
+        }
+        guard error == nil, let v = characteristic.value else { return }
         let hex = v.map { String(format: "%02X", $0) }.joined()
         appendLog("← \(shortName(u)) \(hex)")
         // A620/1531 frames are informational on this firmware; protocol lives on A621/A625.

@@ -319,8 +319,30 @@ final class BleHost: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil, let v = characteristic.value, let d = driver else { return }
         let u = f(characteristic.uuid)
+        // READ RESULTS ALSO LAND HERE (iOS-observed CoreBluetooth behavior —
+        // didReadValueFor never fired while the value arrived here; this is the
+        // real cause of the "reads stall" note in REPLICATION.md and of hosts
+        // falling back to the 1.5.0.0 fw default). Route pending-read values
+        // through the read pipeline before the notify dispatch.
+        if pendingReads.contains(u) {
+            if error == nil, let v = characteristic.value {
+                readResults[u] = v
+                driver?.recorder.recordRead(characteristic: u, data: v)
+                let text = String(data: v, encoding: .utf8).flatMap { $0.isEmpty ? nil : "\"\($0)\"" }
+                out.printLine("read \(shortName(u)): \(v.map { String(format: "%02X", $0) }.joined())\(text.map { " \($0)" } ?? "")")
+            }
+            pendingReads.removeAll { $0 == u }
+            if !pendingReads.isEmpty, let c = chars[pendingReads[0]] {
+                peripheral.readValue(for: c)
+            }
+            if pendingReads.isEmpty {
+                readsComplete = true
+                tryStartMachine()
+            }
+            return
+        }
+        guard error == nil, let v = characteristic.value, let d = driver else { return }
         let hex = v.map { String(format: "%02X", $0) }.joined()
         out.printLine("← \(shortName(u)) \(hex)")
         d.recorder.record(characteristic: u, data: v)

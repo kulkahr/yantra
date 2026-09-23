@@ -7,18 +7,21 @@ import ScaleKit
 
 struct MeasureView: View {
     @ObservedObject var central: ScaleCentral
+    @ObservedObject private var people = PersonStore.shared
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                weightCard
-                statusCard
-                if case .failed(let msg) = central.stage {
-                    Text(msg).font(.footnote).foregroundStyle(.red)
+            ScrollView {
+                VStack(spacing: 24) {
+                    weightCard
+                    if central.lastRecord != nil { compositionCard }
+                    statusCard
+                    if case .failed(let msg) = central.stage {
+                        Text(msg).font(.footnote).foregroundStyle(.red)
+                    }
                 }
-                Spacer()
+                .padding()
             }
-            .padding()
             .navigationTitle("Measure")
         }
     }
@@ -44,6 +47,59 @@ struct MeasureView: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    /// Issue #7 — body composition for the latest weigh-in (issue #8: the scale
+    /// sends only weight+impedance; composition is computed app-side, like the
+    /// official app). Uses the weighing person's profile when set.
+    private var compositionCard: some View {
+        let rec = central.lastRecord!
+        let profile: BodyComposer.Profile = {
+            if let p = people.person(id: rec.personId) {
+                return BodyComposer.Profile(sexMale: p.sexMale, age: p.age,
+                                            heightMeters: p.heightCm / 100)
+            }
+            return ProfileStore.shared.composerProfile
+        }()
+        let c = BodyComposer.compose(weightKg: rec.weightKg,
+                                     impedanceOhm: rec.impedanceOhm.map(Double.init),
+                                     profile: profile)
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Body composition").font(.headline)
+                Spacer()
+                Text(people.person(id: rec.personId)?.name ?? "Default profile")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                metric("BMI", c.bmi, format: "%.1f")
+                metric("Fat", c.fatPercent, format: "%.1f%%")
+                metric("Fat mass", c.fatMassKg, format: "%.1f kg")
+                metric("Muscle", c.musclePercent, format: "%.1f%%")
+                metric("Water", c.waterPercent, format: "%.1f%%")
+                metric("Protein", c.proteinKg, format: "%.1f kg")
+                metric("Bone", c.boneKg, format: "%.1f kg")
+                metric("BMR", Double(c.basalMetabolismKcal), format: "%.0f kcal")
+                metric("Visceral", c.visceralFatLevel, format: "%.1f")
+            }
+            if !c.impedanceBased {
+                Label("No impedance — fat % is a BMI-based estimate",
+                      systemImage: "info.circle")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func metric(_ name: String, _ value: Double, format: String) -> some View {
+        VStack(spacing: 2) {
+            Text(String(format: format, value))
+                .font(.system(.body, design: .rounded).weight(.semibold))
+            Text(name).font(.caption2).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private var statusCard: some View {
@@ -92,7 +148,14 @@ struct HistoryView: View {
     @State private var showExport = false
     @State private var exportText = ""
     @State private var healthMessage = ""
-    @State private var personFilter: UUID? = nil
+    /// Issue #5: History defaults to following the ACTIVE person; the user can
+    /// still pin a specific person or see everything.
+    private enum Scope: Equatable {
+        case followActive
+        case all
+        case person(UUID)
+    }
+    @State private var scope: Scope = .followActive
     @State private var showAssignment = false
     @State private var assigning: [MeasurementRecord] = []
 
@@ -104,8 +167,25 @@ struct HistoryView: View {
     }
 
     private var visibleRecords: [MeasurementRecord] {
-        guard let f = personFilter else { return records }
-        return records.filter { $0.personId == f }
+        switch scope {
+        case .all:
+            return records
+        case .person(let id):
+            return records.filter { $0.personId == id }
+        case .followActive:
+            guard let id = people.activePersonId else { return records }
+            return records.filter { $0.personId == id }
+        }
+    }
+
+    private var scopeTitle: String {
+        switch scope {
+        case .all: return "All"
+        case .person(let id): return people.person(id: id)?.name ?? "?"
+        case .followActive:
+            if let p = people.activePerson { return "\(p.name) ●" }
+            return "All (no active person)"
+        }
     }
 
     private func displayName(for rec: MeasurementRecord) -> String {
@@ -148,13 +228,15 @@ struct HistoryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
-                        Button("All records") { personFilter = nil }
-                        ForEach(people.people) { p in
-                            Button("\(p.name) (slot \(p.slot))") { personFilter = p.id }
+                        Button("Follow active person \(scope == .followActive ? "✓" : "")") { scope = .followActive }
+                        Button("All records \(scope == .all ? "✓" : "")") { scope = .all }
+                        Section("People") {
+                            ForEach(people.people) { p in
+                                Button("\(p.name) (slot \(p.slot)) \(scope == .person(p.id) ? "✓" : "")") { scope = .person(p.id) }
+                            }
                         }
                     } label: {
-                        let title = people.person(id: personFilter)?.name ?? "All"
-                        Label(title, systemImage: "person.2")
+                        Label(scopeTitle, systemImage: "person.2")
                     }
                 }
                 ToolbarItemGroup(placement: .topBarTrailing) {
@@ -320,10 +402,13 @@ private struct AssignmentSheet: View {
             })
     }
 
-    /// Quick add: creates a person from the inline field.
+    /// Quick add: creates a person from the inline field (default profile;
+    /// edit afterwards to set sex/age/height).
     private func addPerson() {
         let name = newName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty, let p = people.add(name: name) else { return }
+        guard !name.isEmpty else { return }
+        guard let p = people.add(name: name,
+                                 profile: (sexMale: true, age: 30, heightCm: 170)) else { return }
         newName = ""
         // If only one record is on the table, assign it straight away.
         if records.count == 1, chosen[records[0].id] == nil {
@@ -423,9 +508,8 @@ struct DeviceView: View {
                             .foregroundStyle(.green)
                     }
                 }
-                Text("slot \(p.slot) · \(p.sexMale == nil ? "—" : (p.sexMale! ? "m" : "f")) · " +
-                     "\(p.age.map(String.init) ?? "—") y · " +
-                     String(format: "%.0f cm", p.heightCm ?? 0))
+                Text("slot \(p.slot) · \(p.sexMale ? "m" : "f") · \(p.age) y · " +
+                     String(format: "%.0f cm", p.heightCm))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
@@ -462,7 +546,9 @@ struct DeviceView: View {
             Button("Add") {
                 let name = newPersonName.trimmingCharacters(in: .whitespaces)
                 guard !name.isEmpty else { return }
-                if people.add(name: name, preferredSlot: newPersonSlot) != nil {
+                if people.add(name: name,
+                              profile: (sexMale: true, age: 30, heightCm: 170),
+                              preferredSlot: newPersonSlot) != nil {
                     newPersonName = ""
                     newPersonSlot = (1...5).first { !people.slotsInUse.contains($0) } ?? 1
                 }
@@ -562,12 +648,6 @@ private struct PersonEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var people = PersonStore.shared
     @State var person: Person
-    @State private var hasProfile: Bool
-
-    init(person: Person) {
-        _person = State(initialValue: person)
-        _hasProfile = State(initialValue: person.sexMale != nil)
-    }
 
     var body: some View {
         NavigationStack {
@@ -577,21 +657,21 @@ private struct PersonEditorView: View {
                         .textInputAutocapitalization(.words)
                 }
                 Section("Profile (pushed as 0x1001 user-info)") {
-                    Toggle("Custom profile", isOn: $hasProfile)
-                    if hasProfile {
-                        Picker("Sex", selection: sexBinding) {
-                            Text("Male").tag(true)
-                            Text("Female").tag(false)
-                        }
-                        .pickerStyle(.segmented)
-                        Stepper("Age: \(person.age ?? 33)", value: ageBinding, in: 5...120)
-                        HStack {
-                            Text("Height")
-                            Spacer()
-                            Text(String(format: "%.0f cm", person.heightCm ?? 175))
-                                .foregroundStyle(.secondary)
-                        }
-                        Slider(value: heightBinding, in: 100...220, step: 1)
+                    Picker("Sex", selection: $person.sexMale) {
+                        Text("Male").tag(true)
+                        Text("Female").tag(false)
+                    }
+                    .pickerStyle(.segmented)
+                    Stepper("Age: \(person.age)", value: $person.age, in: 5...120)
+                    HStack {
+                        Text("Height")
+                        Spacer()
+                        Text(String(format: "%.0f cm", person.heightCm))
+                            .foregroundStyle(.secondary)
+                    }
+                    Slider(value: $person.heightCm, in: 100...220, step: 1)
+                    if person.targetWeightKg != nil {
+                        LabeledRow("Target", String(format: "%.1f kg", person.targetWeightKg!))
                     }
                 }
                 Section {
@@ -604,29 +684,15 @@ private struct PersonEditorView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Button("Save") {
-                    people.rename(person, to: person.name)
                     let mutated = person
-                    people.updateProfile(
-                        mutated, sexMale: hasProfile ? mutated.sexMale : nil,
-                        age: hasProfile ? mutated.age : nil,
-                        heightCm: hasProfile ? mutated.heightCm : nil)
+                    people.rename(mutated, to: mutated.name)
+                    people.updateProfile(mutated, sexMale: mutated.sexMale,
+                                         age: mutated.age, heightCm: mutated.heightCm,
+                                         targetWeightKg: .some(mutated.targetWeightKg))
                     dismiss()
                 }
             }
         }
-    }
-
-    private var sexBinding: Binding<Bool> {
-        Binding(get: { person.sexMale ?? true },
-                set: { person.sexMale = $0 })
-    }
-    private var ageBinding: Binding<Int> {
-        Binding(get: { person.age ?? 33 },
-                set: { person.age = $0 })
-    }
-    private var heightBinding: Binding<Double> {
-        Binding(get: { person.heightCm ?? 175 },
-                set: { person.heightCm = $0 })
     }
 }
 
