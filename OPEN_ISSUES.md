@@ -509,3 +509,40 @@ decoder** — `JSONDecoder().decode` threw on the first date, `try?` swallowed i
 and the inventory came back empty on every relaunch (other stores already set
 the matching strategy; these two predated that convention). Both loaders now set
 `.iso8601`, with cross-instance round-trip regression tests in `ModelTests`.
+
+## 40. Firmware is not visible in the app. — FIXED ✅
+
+Two causes: (a) the handshake fired **7 requests back-to-back** while the watch
+answers strictly one-at-a-time — all but the first were dropped (fixed by the
+command queue, issue #41); (b) a non-UTF8 version payload decoded to nothing and
+the field stayed blank. `handleInfoResponse` now falls back to the printable
+subset, then a hex dump with the raw payload logged, so the field is never
+silently empty. Firmware is also still read from the standard GATT `0x2A26`
+characteristic during discovery.
+
+## 41. Health data still not visible — log shows `history stream cmd 0x4 (7 bytes) — no decoder`. — FIXED ✅
+
+The live log was the decisive clue: the watch returned a `0x7F` stream with
+header cmd **0x04** for an HR-history request — the stream header does **NOT**
+echo the request cmd (`01 02`). Routing by stream cmd can never work. The
+decompiled app routes history responses by the **in-flight command**
+(`commandObject.getCmdName()`) and serializes commands via
+`ProcessNextItemEvent` — which also explains the sport-mode refusals (#42) and
+dropped handshake responses (#40): back-to-back unsolicited commands are
+garbled/refused.
+
+Fix: `WatchCentral` now runs a **strict command queue** — one command in
+flight, an `AckKind` attached to each command (`history(hr/sleep/spo2)`,
+`sportStart`, `sportEnd`, `workoutSummary`), responses complete the in-flight
+command and route its data (8 s timeout safety net), and live/event pushes are
+explicitly excluded from completing commands. History streams now decode into
+HR/sleep/SpO₂ and persist, regardless of the stream's header cmd byte.
+
+## 42. Starting a workout gives `watch refused sport mode (already active or unsupported)`. — FIXED ✅
+
+Same root cause as #41 — the start command raced other in-flight commands, so
+the watch (which was busy or already in a session) answered 0. With the command
+queue the start goes out cleanly; additionally, on refusal the raw ack is
+logged and the app performs a **stop-then-start retry** (stop command →
+re-request start) once, since a watch-side session is the likeliest refusal
+reason. If the retry also fails the log says to end the watch-side session.
