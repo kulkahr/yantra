@@ -1,7 +1,7 @@
 # SRD-010 — Smart-Watch Integration (boAt Storm Call 3)
 
-Parent: SRD-000 · Priority P2 · Status: **IMPLEMENTED (P1 scope live; history/storage P2)**
-Driver: `WatchDriver` (`scalekit/Sources/ScaleKit/Drivers.swift`), protocol: `KahaProtocol` (`scalekit/Sources/ScaleKit/KahaProtocol.swift`), app session: `WatchCentral` (`ios/Yantra/WatchCentral.swift`)
+Parent: SRD-000 · Priority P2 · Status: **IMPLEMENTED (live data, sleep/SpO2 history, persistence)**
+Driver: `WatchDriver` (`scalekit/Sources/ScaleKit/Drivers.swift`), protocol: `KahaProtocol` (`scalekit/Sources/ScaleKit/KahaProtocol.swift`), app session: `WatchCentral` (`ios/Yantra/WatchCentral.swift`), storage: `WatchStore` (`ios/Yantra/WatchStore.swift`)
 
 ## 1. Purpose
 
@@ -58,9 +58,11 @@ No checksum, no sequence numbers, no session/auth handshake — the link is usab
 | `0x00` | `0x81` | Set device time | yyyy(2 BCD) MM dd HH mm ss ±HH mm (10 B) |
 | `0x01` | `0x02` | HR/BP auto-measure interval (set) | `minutes uint16 LE` |
 | `0x01` | `0x02` | HR/BP history request | `day startHour endHour` (day = days ago, 0 = today) |
+| `0x01` | `0x08` | **10-min sleep history** | `day startHour endHour` |
+| `0x01` | `0x26` | **Periodic SpO2 history** | `day startHour endHour` |
 | `0x01` | `0x0A` | Get latest health sample | `type` (0 HR, 1 SpO2, 2 temp, 3 BP) |
 | `0x01` | `0x2F` | Get today's fitness summary | — |
-| `0x7F` | — | Multipacket header (responses) | `payload[4..5]` = total packet count LE |
+| `0x7F` | — | Multipacket header (responses) | `payload[0..1]` = total packet count LE |
 
 **Pushes (watch → app, no request):**
 
@@ -69,6 +71,8 @@ No checksum, no sequence numbers, no session/auth handshake — the link is usab
 | `0x06` | `0x80` | **Live health** | `hr, dbp, sbp, rr, stress` (payload[0..4]) — `LiveHealthRes` |
 | `0x06` | `0x81` | **Live steps** | steps uint32 LE at payload[0..3]; optional float32 distance + float32 calories (16-B frames) |
 | `0x01` | `0x02` resp | HR/BP history day | `(60/interval)×4` bytes per hour: `hr, dbp, sbp, rr` per sample |
+| `0x01` | `0x08` resp | **Sleep day** | 6 bytes/hour; each byte = FOUR 2-bit stages × 2.5 min (0 awake, 1 light, 2 deep, 3 REM) |
+| `0x01` | `0x26` resp | **SpO2 day** | 1 byte/5-min slot, `0xFF` = no reading |
 | `0x00` | `0x06` resp | Device time | yyyy(2) MM dd HH mm ss |
 | `0x00` | `0x08` resp | Battery | `batt%` byte |
 | `0x00` | `0x02` resp | Firmware version | ASCII string |
@@ -78,20 +82,23 @@ No checksum, no sequence numbers, no session/auth handshake — the link is usab
 | ID | Requirement |
 |---|---|
 | FR-1 | The watch SHALL appear in the Devices hub scan by name prefix (`stormcall_`) and pair with zero accounts/cloud. |
-| FR-2 | Health data SHALL be stored locally only; Apple Health export stays opt-in via the existing owner-profile flow (issue #14 model) — P2, not in this pass. |
+| FR-2 | Health data SHALL be stored locally only (`WatchStore` → `watchdata.json`, one merged record per day); Apple Health export stays opt-in via the existing owner-profile flow (issue #14 model) — future work. |
 | FR-3 | Watch data SHALL NOT mix into scale weight-history attribution (SRD-008); records carry the watch's device id. |
 | FR-4 | Protocol knowledge SHALL be ported verbatim from the decompiled Crest app and documented here (this document + `KahaProtocol.swift` source comments). |
 | FR-5 | Battery + firmware SHALL surface on the watch's driver page (SRD-006 parity). |
-| FR-6 | The watch UI SHALL show live heart rate, live steps, battery, firmware, and a today/timeline HR history view once a day of data is pulled. |
+| FR-6 | The watch UI SHALL show live heart rate, live steps, battery, firmware, and per-day HR/sleep/SpO2 history once a day of data is pulled ("Today/Yesterday" picker). |
+| FR-7 | Pulled history SHALL persist across launches, merged per calendar day (steps + sleep-stage minutes + SpO2 average + HR-by-hour). |
 
 ## 7. Acceptance criteria
 
 1. `stormcall_3_0610` appears in Add-device → Smart Watch scan; tapping pairs it into the hub inventory.
 2. The watch page shows live HR updating while worn, today's step count, battery %, and firmware string.
 3. HR history request returns per-hour samples rendered as a timeline list.
-4. `swift test` ScaleKit (incl. new KahaProtocol vector tests) and Yantra xcodebuild stay green.
-5. No boAt/Cove cloud endpoints contacted at any point (FR-2/NFR-1).
+4. Sleep pull renders stage totals (deep/REM/light/awake) with a per-hour list; SpO2 pull renders the day average + samples.
+5. Pulled days survive an app restart (Stored days section lists them from `watchdata.json`).
+6. `swift test` ScaleKit (incl. KahaProtocol vector tests) and Yantra xcodebuild stay green.
+7. No boAt/Cove cloud endpoints contacted at any point (FR-2/NFR-1).
 
 ## 8. Out of scope (this pass)
 
-Sleep sessions, SpO2 history, notifications phone→watch, watch-face upload, BT-call control — the command classes are mapped in the decompiled app and can be added incrementally behind the same `KahaProtocol` codec.
+Notifications phone→watch, watch-face upload, BT-call control, manual SpO2/temperature sessions — the command classes are mapped in the decompiled app and can be added incrementally behind the same `KahaProtocol` codec.

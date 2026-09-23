@@ -32,8 +32,13 @@ final class WatchCentral: NSObject, ObservableObject {
     @Published private(set) var watchTime: Date?
     @Published private(set) var liveHealth: KahaProtocol.LiveHealth?
     @Published private(set) var liveSteps: KahaProtocol.LiveSteps?
-    @Published private(set) var hrSamples: [KahaProtocol.HRSample] = []
     @Published private(set) var hrDay: Int = 0
+    @Published private(set) var sleepHours: [KahaProtocol.SleepHour] = []
+    @Published private(set) var spo2Samples: [KahaProtocol.SpO2Sample] = []
+    /// HR history with sample timestamps (drives the UI timeline + persistence).
+    @Published private(set) var hrDated: [(date: Date, sample: KahaProtocol.HRSample)] = []
+    /// UI-facing samples (compat view of `hrDated`).
+    var hrSamples: [KahaProtocol.HRSample] { hrDated.map { $0.sample } }
     @Published private(set) var foundWatches: [DiscoveredWatch] = []
 
     struct DiscoveredWatch: Identifiable, Equatable {
@@ -115,10 +120,28 @@ final class WatchCentral: NSObject, ObservableObject {
     /// command doubles as the auto-measure enabler (Crest parity, 60 min).
     func loadHRHistory(day: Int) {
         hrDay = day
-        hrSamples = []
+        hrDated = []
         send(KahaProtocol.setAutoHRInterval(minutes: 60))
         send(KahaProtocol.requestHRHistory(day: day, startHour: 0, endHour: 23))
         appendLog("HR history requested (day \(day))")
+    }
+
+    /// Requests one day of 10-min sleep + periodic SpO2 history. Decoded
+    /// results persist into `WatchStore` (SRD-010 FR-2) and update published
+    /// state for the UI.
+    func loadSleepAndSpo2History(day: Int) {
+        sleepHours = []
+        spo2Samples = []
+        send(KahaProtocol.requestSleepHistory(day: day, startHour: 0, endHour: 23))
+        send(KahaProtocol.requestSpo2History(day: day, startHour: 0, endHour: 23))
+        appendLog("sleep/SpO2 history requested (day \(day))")
+    }
+
+    /// Pulls everything the official app shows for a day: HR/BP, sleep, SpO2
+    /// (steps arrive as live pushes while connected).
+    func loadDayHistory(day: Int) {
+        loadHRHistory(day: day)
+        loadSleepAndSpo2History(day: day)
     }
 
     // MARK: - Internals
@@ -174,16 +197,84 @@ final class WatchCentral: NSObject, ObservableObject {
         case (KahaProtocol.ClassId.live, KahaProtocol.LiveCmd.liveSteps):
             if let s = KahaProtocol.decodeLiveSteps(frame.payload) {
                 liveSteps = s
+                persistLiveSteps()
                 appendLog("live steps \(s.steps)")
             }
         case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.hrBpInterval):
             // History day response — samples are 4-byte HR/BP records.
-            hrSamples = KahaProtocol.decodeHRHistory(frame.payload, intervalMinutes: 60,
-                                                     startHour: 0, day: hrDay)
-                .map { $0.sample }
-            appendLog("HR history: \(hrSamples.count) samples")
+            hrDated = KahaProtocol.decodeHRHistory(frame.payload, intervalMinutes: 60,
+                                                   startHour: 0, day: hrDay)
+            persistHRDay()
+            appendLog("HR history: \(hrDated.count) samples")
+        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.sleepHistory):
+            // 10-min sleep day — 6 bytes/hour of 4×2-bit stages (2.5 min each).
+            sleepHours = KahaProtocol.decodeSleepHistory(frame.payload, startHour: 0)
+            persistSleepDay()
+            appendLog("sleep history: \(sleepHours.count) hours · " +
+                      String(format: "%.0f", sleepHours.reduce(0) { $0 + $1.totalSleepMinutes }) + " min sleep")
+        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.spo2History):
+            // Periodic SpO2 day — one byte per 5-min slot, 0xFF = no reading.
+            spo2Samples = KahaProtocol.decodeSpo2History(frame.payload, startHour: 0,
+                                                         day: hrDay)
+            persistSpo2Day()
+            if let avg = spo2Average {
+                appendLog("SpO2 history: \(spo2Samples.count) samples · avg \(avg)%")
+            } else {
+                appendLog("SpO2 history: no valid samples")
+            }
         default:
             handleInfoResponse(frame)
+        }
+    }
+
+    // MARK: - Persistence (WatchStore, SRD-010 FR-2)
+
+    var spo2Average: Int? {
+        guard !spo2Samples.isEmpty else { return nil }
+        return spo2Samples.map { $0.percent }.reduce(0, +) / spo2Samples.count
+    }
+
+    /// Persistence helpers hop to the main actor — `handleFrame` runs from the
+    /// nonisolated CBPeripheralDelegate conformance.
+    private func persistHRDay() {
+        let byHour: [Int: Int] = Dictionary(uniqueKeysWithValues: hrDated.compactMap { entry in
+            entry.sample.heartRate > 0
+                ? (Calendar.current.component(.hour, from: entry.date), entry.sample.heartRate)
+                : nil
+        })
+        guard !byHour.isEmpty else { return }
+        let key = WatchStore.dayKey(for: Date())
+        Task { @MainActor in
+            WatchStore.shared.upsert(day: key, hrByHour: byHour)
+        }
+    }
+
+    private func persistSleepDay() {
+        guard !sleepHours.isEmpty else { return }
+        let key = WatchStore.dayKey(for: Date())
+        let hours = sleepHours
+        Task { @MainActor in
+            for h in hours {
+                WatchStore.shared.upsert(day: key, sleep: h)
+            }
+        }
+    }
+
+    private func persistSpo2Day() {
+        guard !spo2Samples.isEmpty else { return }
+        let key = WatchStore.dayKey(for: Date())
+        let samples = spo2Samples
+        Task { @MainActor in
+            WatchStore.shared.upsert(day: key, spo2: samples)
+        }
+    }
+
+    private func persistLiveSteps() {
+        guard let s = liveSteps else { return }
+        let key = WatchStore.dayKey(for: Date())
+        Task { @MainActor in
+            WatchStore.shared.upsert(day: key, steps: s.steps,
+                                     calories: s.calories, distanceMeters: s.meters)
         }
     }
 

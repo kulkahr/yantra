@@ -13,6 +13,9 @@ struct WatchView: View {
             if watch.stage == .live {
                 liveSection
                 historySection
+                sleepSection
+                spo2Section
+                storedSection
                 deviceSection
             }
             logSection
@@ -100,22 +103,19 @@ struct WatchView: View {
 
     private var historySection: some View {
         Section {
-            Picker("Day", selection: $historyDay) {
-                Text("Today").tag(0)
-                Text("Yesterday").tag(1)
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: historyDay) { _, day in watch.loadHRHistory(day: day) }
-            if watch.hrSamples.isEmpty {
+            dayPicker
+            if watch.hrDated.isEmpty {
                 Text("Pull a day of auto-measured heart rate from the watch.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                ForEach(Array(watch.hrSamples.enumerated().reversed()), id: \.offset) { _, s in
+                ForEach(Array(watch.hrDated.enumerated().reversed()), id: \.offset) { _, entry in
                     HStack {
+                        Text(entry.date.formatted(date: .omitted, time: .shortened))
+                            .font(.caption.monospaced()).foregroundStyle(.secondary)
                         Image(systemName: "heart").foregroundStyle(.red)
-                        Text("\(s.heartRate) bpm")
+                        Text("\(entry.sample.heartRate) bpm")
                         Spacer()
-                        Text("BP \(s.systolic)/\(s.diastolic)")
+                        Text("BP \(entry.sample.systolic)/\(entry.sample.diastolic)")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -124,6 +124,135 @@ struct WatchView: View {
             Text("Heart-rate history")
         } footer: {
             Text("Auto-measure must be enabled on the watch (every 60 min by default).")
+        }
+    }
+
+    private var sleepSection: some View {
+        Section {
+            if watch.sleepHours.isEmpty {
+                Text("Pull a day of 10-minute sleep tracking from the watch.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                let totals = sleepTotals
+                HStack {
+                    stageBar
+                    Spacer()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Label(String(format: "%.1f h", totals.sleep / 60),
+                              systemImage: "bed.double.fill").foregroundStyle(.indigo)
+                        Text("deep \(Int(totals.deep))m · REM \(Int(totals.rem))m · light \(Int(totals.light))m")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(Array(watch.sleepHours.reversed()), id: \.hour) { h in
+                    if h.totalSleepMinutes > 0 {
+                        HStack {
+                            Text(String(format: "%02d:00", h.hour))
+                                .font(.caption.monospaced()).foregroundStyle(.secondary)
+                            Text("\(Int(h.totalSleepMinutes)) min")
+                            Spacer()
+                            Text("\(Int(h.deepMinutes))D \(Int(h.remMinutes))R \(Int(h.lightMinutes))L")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Sleep")
+        } footer: {
+            Text("Stages are 2.5-minute readings packed 4-per-byte, decoded exactly as the official app (awake / light / deep / REM).")
+        }
+    }
+
+    private var spo2Section: some View {
+        Section {
+            if watch.spo2Samples.isEmpty {
+                Text("Pull a day of periodic blood-oxygen readings from the watch.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                HStack {
+                    Image(systemName: "lungs.fill").foregroundStyle(.cyan)
+                    Text("\(watch.spo2Average.map { "\($0)%" } ?? "—")")
+                        .font(.system(.title2, design: .rounded).weight(.semibold))
+                    Text("avg SpO₂").foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(watch.spo2Samples.count) samples")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(Array(watch.spo2Samples.suffix(12).enumerated().reversed()), id: \.offset) { _, s in
+                    HStack {
+                        Text(s.date.formatted(date: .omitted, time: .shortened))
+                            .font(.caption.monospaced()).foregroundStyle(.secondary)
+                        Text("\(s.percent)%")
+                        Spacer()
+                        ProgressView(value: Double(s.percent), total: 100)
+                            .frame(width: 80)
+                    }
+                }
+            }
+        } header: {
+            Text("Blood oxygen (SpO₂)")
+        }
+    }
+
+    private var storedSection: some View {
+        Section("Stored days (local)") {
+            let stored = WatchStore.shared.days
+            if stored.isEmpty {
+                Text("Pulled history is saved locally day by day.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(stored.prefix(7)) { d in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(d.dayKey).font(.caption.monospaced())
+                            Spacer()
+                            if d.spo2Average != nil {
+                                Image(systemName: "lungs.fill").font(.caption).foregroundStyle(.cyan)
+                            }
+                            if d.sleepTotalMinutes > 0 {
+                                Image(systemName: "bed.double.fill").font(.caption).foregroundStyle(.indigo)
+                            }
+                        }
+                        Text("\(d.steps) steps · " +
+                             (d.spo2Average.map { "SpO₂ \($0)% · " } ?? "") +
+                             (d.sleepTotalMinutes > 0 ? String(format: "sleep %.1f h", d.sleepTotalMinutes / 60) : "no sleep"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var dayPicker: some View {
+        Picker("Day", selection: $historyDay) {
+            Text("Today").tag(0)
+            Text("Yesterday").tag(1)
+        }
+        .pickerStyle(.segmented)
+        .onChange(of: historyDay) { _, day in watch.loadDayHistory(day: day) }
+    }
+
+    private var sleepTotals: (sleep: Double, deep: Double, rem: Double, light: Double, awake: Double) {
+        (watch.sleepHours.reduce(0) { $0 + $1.totalSleepMinutes },
+         watch.sleepHours.reduce(0) { $0 + $1.deepMinutes },
+         watch.sleepHours.reduce(0) { $0 + $1.remMinutes },
+         watch.sleepHours.reduce(0) { $0 + $1.lightMinutes },
+         watch.sleepHours.reduce(0) { $0 + $1.awakeMinutes })
+    }
+
+    /// One stacked bar per hour, segments colored by stage share.
+    private var stageBar: some View {
+        let totals = sleepTotals
+        let total = max(totals.sleep + totals.awake, 1)
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 1) {
+                Capsule().fill(.indigo).frame(width: 90 * totals.deep / total, height: 10)
+                Capsule().fill(.purple).frame(width: 90 * totals.rem / total, height: 10)
+                Capsule().fill(.blue).frame(width: 90 * totals.light / total, height: 10)
+                Capsule().fill(.gray.opacity(0.4)).frame(width: 90 * totals.awake / total, height: 10)
+            }
+            Text("D · R · L · awake").font(.caption2).foregroundStyle(.secondary)
         }
     }
 

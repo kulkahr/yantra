@@ -289,5 +289,37 @@ then implement.
 should show firmware, battery, and (while worn) live HR/steps pushes. HR history requires
 auto-measure enabled (the pull command enables it at 60-min interval, Crest parity).
 
-**Not in this pass (SRD-010 §8):** sleep/SpO2 history, notifications, watch-face upload,
+**Not in this pass (SRD-010 §8):** notifications, watch-face upload,
 BT-call control — command classes are mapped in the decompiled app for incremental follow-ups.
+
+## 18. Watch sleep/SpO2 history + persistent local storage (SRD-010 FR-2/FR-7) — IMPLEMENTED ✅
+
+**Request:** add sleep and SpO2 history (everything the official Crest app shows for a
+day) and persist watch data locally.
+
+**What was done:**
+
+1. **Payload layouts transcribed** from the decompiled Crest app:
+   - Sleep: `GET_10MIN_SLEEP_DATA = {1, 8, 7, 0}` + `day startHour endHour` →
+     response carries 6 bytes per hour; each byte packs FOUR 2-bit stage values
+     (2.5 min each; 0 awake, 1 light, 2 deep, 3 REM) per `SleepDataRes`.
+   - SpO2: `GET_SPO2_PERIODIC = {1, 38, 7, 0}` + same day/hours → one byte per
+     5-minute slot, `0xFF` = no reading, per `Spo2PeriodicDataRes`.
+2. **`KahaProtocol` extended**: `requestSleepHistory` / `requestSpo2History` frame
+   builders, `SleepStage`/`SleepHour` (per-hour stage minutes) and `SpO2Sample`
+   decoders. 6 new unit tests (stage unpacking, midnight wrap, partial-byte
+   drop, invalid-slot skip, day offset) — ScaleKit now 78/78.
+3. **`WatchStore`** (`ios/Yantra/WatchStore.swift`): persistent per-day merge
+   store → `Application Support/Yantra/watchdata.json`. One `WatchDayRecord` per
+   calendar day holding steps, calories, distance, sleep-stage minutes,
+   SpO2 average and HR-by-hour; upserts merge instead of overwrite.
+4. **`WatchCentral`**: `loadDayHistory(day:)` pulls HR/BP + sleep + SpO2 for the
+   day; every response (including live-steps pushes) persists into `WatchStore`
+   (main-actor hop from the nonisolated CB delegate).
+5. **`WatchView`**: sleep section (stage totals + stacked stage bar + per-hour
+   list), SpO2 section (day average + sample list with progress bars), and a
+   "Stored days (local)" section listing persisted history. The Today/Yesterday
+   picker now pulls the full day in one tap.
+
+**Verified:** ScaleKit `swift test` 78/78 · Yantra `xcodebuild build` zero warnings ·
+`YantraTests` TEST SUCCEEDED.

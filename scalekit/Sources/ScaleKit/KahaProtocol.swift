@@ -51,6 +51,8 @@ public enum KahaProtocol {
     public enum FitnessCmd {
         public static let hrBpInterval: UInt8 = 0x02    // set auto-measure interval / request history
         public static let latestHealth: UInt8 = 0x0A    // payload byte: 0 HR, 1 SpO2, 2 temp, 3 BP
+        public static let sleepHistory: UInt8 = 0x08    // 10-min sleep data (GET_10MIN_SLEEP_DATA)
+        public static let spo2History: UInt8 = 0x26     // periodic SpO2 (GET_SPO2_PERIODIC)
         public static let todaysFitness: UInt8 = 0x2F
     }
 
@@ -85,6 +87,20 @@ public enum KahaProtocol {
     /// (day = days ago, 0 = today; mirrors `HeartRateBpReq`).
     public static func requestHRHistory(day: Int, startHour: Int, endHour: Int) -> [UInt8] {
         frame(classId: ClassId.fitness, cmdId: FitnessCmd.hrBpInterval,
+              payload: [UInt8(day), UInt8(startHour), UInt8(endHour)])
+    }
+
+    /// `0x01 0x08` 10-min sleep history — `day startHour endHour`
+    /// (`GET_10MIN_SLEEP_DATA` + `RequestPayload` day/hours, per `SleepDataReq`).
+    public static func requestSleepHistory(day: Int, startHour: Int, endHour: Int) -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.sleepHistory,
+              payload: [UInt8(day), UInt8(startHour), UInt8(endHour)])
+    }
+
+    /// `0x01 0x26` periodic SpO2 history — `day startHour endHour`
+    /// (`GET_SPO2_PERIODIC` + `RequestPayload`, per `PeriodicSPO2BaseReq`).
+    public static func requestSpo2History(day: Int, startHour: Int, endHour: Int) -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.spo2History,
               payload: [UInt8(day), UInt8(startHour), UInt8(endHour)])
     }
 
@@ -224,6 +240,104 @@ public enum KahaProtocol {
                 out.append((date, sample))
             }
             offset += 4
+        }
+        return out
+    }
+
+    // MARK: - Sleep history (SleepDataRes layout)
+
+    /// Sleep stage per 2-bit packed value (SleepDataRes counters:
+    /// 0 → awake, 1 → light, 2 → deep, 3 → REM).
+    public enum SleepStage: Int, Codable, CaseIterable {
+        case awake = 0
+        case light = 1
+        case deep = 2
+        case rem = 3
+    }
+
+    /// One hour of sleep, aggregated into minutes per stage.
+    public struct SleepHour: Equatable, Codable {
+        public var hour: Int                 // 0–23, watch-local day
+        public var awakeMinutes: Double
+        public var lightMinutes: Double
+        public var deepMinutes: Double
+        public var remMinutes: Double
+
+        public init(hour: Int, awakeMinutes: Double, lightMinutes: Double,
+                    deepMinutes: Double, remMinutes: Double) {
+            self.hour = hour
+            self.awakeMinutes = awakeMinutes
+            self.lightMinutes = lightMinutes
+            self.deepMinutes = deepMinutes
+            self.remMinutes = remMinutes
+        }
+
+        public var totalSleepMinutes: Double { lightMinutes + deepMinutes + remMinutes }
+    }
+
+    /// Decodes 10-min sleep history (`0x01 0x08` response).
+    ///
+    /// Wire layout (SleepDataRes): 6 bytes per hour starting at `startHour`;
+    /// each byte packs FOUR 2-bit stage values of 2.5 min each (4 × 2.5 = the
+    /// byte's 10-minute window). Aggregates into per-hour stage minutes.
+    public static func decodeSleepHistory(_ payload: [UInt8], startHour: Int) -> [SleepHour] {
+        let bytesPerHour = 6
+        let valuesPerByte = 4
+        let minutesPerValue = 10.0 / Double(valuesPerByte)
+        var out: [SleepHour] = []
+        var offset = 0
+        var hour = startHour
+        while offset + bytesPerHour <= payload.count {
+            var awake = 0.0, light = 0.0, deep = 0.0, rem = 0.0
+            for b in offset..<(offset + bytesPerHour) {
+                let byte = payload[b]
+                for shift in [6, 4, 2, 0] {
+                    let v = Int((byte >> UInt8(shift)) & 0x03)
+                    switch SleepStage(rawValue: v) {
+                    case .awake: awake += minutesPerValue
+                    case .light: light += minutesPerValue
+                    case .deep: deep += minutesPerValue
+                    case .rem: rem += minutesPerValue
+                    case .none: break
+                    }
+                }
+            }
+            out.append(SleepHour(hour: hour % 24, awakeMinutes: awake,
+                                 lightMinutes: light, deepMinutes: deep, remMinutes: rem))
+            offset += bytesPerHour
+            hour += 1
+        }
+        return out
+    }
+
+    // MARK: - SpO2 history (Spo2PeriodicDataRes layout)
+
+    /// One periodic SpO2 sample (5-minute slot).
+    public struct SpO2Sample: Equatable, Codable {
+        public var date: Date
+        public var percent: Int
+
+        public init(date: Date, percent: Int) {
+            self.date = date
+            self.percent = percent
+        }
+    }
+
+    /// Decodes periodic SpO2 history (`0x01 0x26` response): one byte per
+    /// 5-minute slot from `startHour`; `0xFF` = no reading (Spo2PeriodicDataRes
+    /// filters `-1` bytes). `day` = days ago for the sample's date.
+    public static func decodeSpo2History(_ payload: [UInt8], startHour: Int, day: Int,
+                                         timeZone: TimeZone = .current) -> [SpO2Sample] {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+        guard let base = cal.date(byAdding: .day, value: -day, to: Date()) else { return [] }
+        let dayStart = cal.startOfDay(for: base)
+        var out: [SpO2Sample] = []
+        for (i, b) in payload.enumerated() where b != 0xFF {
+            let minute = startHour * 60 + i * 5
+            if let date = cal.date(byAdding: .minute, value: minute, to: dayStart) {
+                out.append(SpO2Sample(date: date, percent: Int(b)))
+            }
         }
         return out
     }

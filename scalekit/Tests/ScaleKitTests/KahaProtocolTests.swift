@@ -136,4 +136,71 @@ final class KahaProtocolTests: XCTestCase {
         XCTAssertTrue(KahaProtocol.decodeHRHistory([1, 2, 3, 4], intervalMinutes: 0,
                                                    startHour: 0, day: 0).isEmpty)
     }
+
+    // MARK: - Sleep history (SleepDataRes layout)
+
+    func testSleepRequestFrame() {
+        // GET_10MIN_SLEEP_DATA = {1, 8, 7, 0} + day/startHour/endHour.
+        XCTAssertEqual(KahaProtocol.requestSleepHistory(day: 1, startHour: 0, endHour: 23),
+                       [0x01, 0x08, 0x07, 0x00, 0x01, 0x00, 0x17])
+        // GET_SPO2_PERIODIC = {1, 38, 7, 0} + day/startHour/endHour.
+        XCTAssertEqual(KahaProtocol.requestSpo2History(day: 0, startHour: 0, endHour: 23),
+                       [0x01, 0x26, 0x07, 0x00, 0x00, 0x00, 0x17])
+    }
+
+    func testSleepHistoryDecodeStages() {
+        // One hour = 6 bytes = 24 values of 2.5 min.
+        // Byte 0b01_00_10_01 = light(1), deep(2), awake(0), light(1).
+        var payload: [UInt8] = [0b01_00_10_01]          // 2.5: light, deep, awake, light
+        payload.append(contentsOf: repeatElement(0b01_01_01_01, count: 5))  // all light
+        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 22)
+        XCTAssertEqual(hours.count, 1)
+        let h = hours[0]
+        XCTAssertEqual(h.hour, 22)
+        XCTAssertEqual(h.awakeMinutes, 2.5, accuracy: 0.001)
+        XCTAssertEqual(h.deepMinutes, 2.5, accuracy: 0.001)
+        // Byte 0: two light values; bytes 1–5: 20 light values (all 0b01).
+        XCTAssertEqual(h.lightMinutes, 2.5 * 2 + 2.5 * 20, accuracy: 0.001)
+        XCTAssertEqual(h.remMinutes, 0, accuracy: 0.001)
+        XCTAssertEqual(h.totalSleepMinutes, 57.5, accuracy: 0.001)
+    }
+
+    func testSleepHistoryMultipleHoursAndWrap() {
+        // 2 full hours starting at 23 → hours 23, 0 (midnight wrap).
+        let payload = [UInt8](repeating: 0b10_10_10_10, count: 12)  // all deep
+        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 23)
+        XCTAssertEqual(hours.count, 2)
+        XCTAssertEqual(hours[0].hour, 23)
+        XCTAssertEqual(hours[1].hour, 0)
+        XCTAssertEqual(hours[1].deepMinutes, 60, accuracy: 0.001)
+    }
+
+    func testSleepHistoryTrailingPartialByteDropped() {
+        // 7 bytes → only the first full hour (6 bytes) decodes.
+        let payload = [UInt8](repeating: 0x55, count: 7)
+        XCTAssertEqual(KahaProtocol.decodeSleepHistory(payload, startHour: 0).count, 1)
+    }
+
+    // MARK: - SpO2 history (Spo2PeriodicDataRes layout)
+
+    func testSpo2HistoryDecodeSkipsInvalid() {
+        // 3 slots: 95, 0xFF (invalid), 97 → 2 samples.
+        let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 97], startHour: 8, day: 0)
+        XCTAssertEqual(samples.count, 2)
+        XCTAssertEqual(samples[0].percent, 95)
+        XCTAssertEqual(samples[1].percent, 97)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let hour = cal.component(.hour, from: samples[1].date)
+        XCTAssertEqual(hour, 8, "second slot is 5 min past the 08:00 start")
+    }
+
+    func testSpo2HistoryDayOffset() {
+        // day 1 → yesterday's 23:xx slot.
+        let samples = KahaProtocol.decodeSpo2History([91], startHour: 23, day: 1)
+        XCTAssertEqual(samples.count, 1)
+        let cal = Calendar(identifier: .gregorian)
+        let expected = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: Date()))!
+        XCTAssertTrue(cal.isDate(samples[0].date, inSameDayAs: expected))
+    }
 }
