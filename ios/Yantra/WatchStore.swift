@@ -43,9 +43,11 @@ final class WatchStore: ObservableObject {
             .appendingPathComponent("Yantra", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("watchdata.json")
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode([WatchDayRecord].self, from: data) {
-            days = decoded
+        if let data = try? Data(contentsOf: url) {
+            // Issue #39: persist() writes .iso8601 dates — decoder must match.
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            days = (try? decoder.decode([WatchDayRecord].self, from: data)) ?? []
         }
     }
 

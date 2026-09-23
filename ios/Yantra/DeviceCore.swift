@@ -28,9 +28,13 @@ final class DeviceStore: ObservableObject {
             .appendingPathComponent("Yantra", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("devices.json")
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode([PairedDevice].self, from: data) {
-            devices = decoded
+        if let data = try? Data(contentsOf: url) {
+            // Issue #39: persist() writes .iso8601 dates — the decoder MUST
+            // match, or the whole inventory silently fails to load and every
+            // restart "loses" the paired devices.
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            devices = (try? decoder.decode([PairedDevice].self, from: data)) ?? []
         }
     }
 

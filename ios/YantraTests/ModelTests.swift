@@ -152,4 +152,39 @@ final class ModelTests: XCTestCase {
         XCTAssertNil(ScaleCentral.macFromMfg(nil))
         XCTAssertNil(ScaleCentral.macFromMfg(Data([1, 2])))
     }
+
+    // MARK: - Issue #39: persisted inventory must survive an app restart.
+
+    @MainActor
+    func testDeviceStoreRoundTripAcrossInstances() {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let id = UUID()
+        do {
+            let store = DeviceStore(directory: dir)
+            store.upsert(PairedDevice(peripheralId: id, kind: .scale,
+                                      name: "A6 Scale", addedAt: Date()))
+            store.upsert(PairedDevice(peripheralId: UUID(), kind: .watch,
+                                      name: "stormcall_3_0610", addedAt: Date()))
+        }
+        // A brand-new instance simulates the app relaunching.
+        let reloaded = DeviceStore(directory: dir)
+        XCTAssertEqual(reloaded.devices.count, 2, "inventory must survive restart")
+        XCTAssertEqual(reloaded.devices.first { $0.peripheralId == id }?.name, "A6 Scale")
+    }
+
+    @MainActor
+    func testWatchStoreRoundTripAcrossInstances() {
+        let dir = tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        do {
+            let store = WatchStore(directory: dir)
+            store.upsert(day: "2026-09-24", steps: 8123, calories: 210.5,
+                         distanceMeters: 6100, hrByHour: [9: 72, 10: 75])
+        }
+        let reloaded = WatchStore(directory: dir)
+        XCTAssertEqual(reloaded.days.count, 1, "watch days must survive restart")
+        XCTAssertEqual(reloaded.days.first?.steps, 8123)
+        XCTAssertEqual(reloaded.days.first?.hrByHour, [9: 72, 10: 75])
+    }
 }
