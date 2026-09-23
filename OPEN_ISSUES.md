@@ -1,5 +1,11 @@
 # Open Issues
 
+> **Status 2026-09-23:** all 15 issues below are FIXED ✅ and verified (ScaleKit `swift test` 62/62 ·
+> Firefly `BUILD SUCCEEDED` zero warnings · FireflyTests 8/8). The app has since been restructured
+> into the SRD-009 multi-device hub: Devices hub is the home screen, the scale is the first driver,
+> watch/bulb drivers ship as documented stubs (SRD-010/SRD-011 placeholders). New issues go below
+> the existing entries as `## 16. …`.
+
 ## 1. Scan mode lists the same scale 10+ times — FIXED ✅
 
 **Symptom:** On the Device screen, the realme scale repeats more than 10 times in the scan list.

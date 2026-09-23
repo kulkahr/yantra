@@ -1,7 +1,8 @@
 # Firefly — Technical Design Document (TDD)
 
-Version 1.0 · 2026-09-20 · Companion to SRD-000…SRD-007
+Version 2.0 · 2026-09-23 · Companion to SRD-000…SRD-011
 Evidence base: `../analysis/PROTOCOL_ANALYSIS.md` (decompiled Lifesense stack) + live BLE capture (`../analysis/tools/ble_scan.swift`, 2026-09-20).
+Architecture: multi-device driver/registry model per SRD-009 (hub → drivers → shared transport).
 
 ## 1. System overview
 
@@ -43,15 +44,22 @@ Evidence base: `../analysis/PROTOCOL_ANALYSIS.md` (decompiled Lifesense stack) +
 
 | Module | Responsibility | Key types |
 |---|---|---|
-| `ScaleKit` (framework/package, pure logic + platform port) | All A6-protocol logic; 100% unit-testable without hardware | `A6FrameCodec`, `A6Command`, `A6PacketAssembler`, `PairStateMachine`, `SessionStateMachine`, `WeightRecordParser` |
-| `ScaleKitBle<Platform>` | Thin GATT adapter: scan/connect/notify/write; platform adapter interface `BleCentralPort` | `CoreBleCentral` (iOS), `AndroidBleCentral` |
-| `Domain` | User profiles, measurements, body-composition math, unit conversion | `Measurement`, `UserProfile`, `BodyComposer`, `UnitConverter` |
-| `Persistence` | Local encrypted store; export (CSV/HealthKit) behind explicit user action | `MeasurementStore`, `BindRecordStore` |
-| `UI` | Views + view models only | per SRD flows |
+| `ScaleKit` (Swift package, pure logic) | All A6-protocol logic **+ the SRD-009 driver layer**: `DeviceDriver`/`DeviceScanner`/`DeviceSession`, `DriverRegistry`, per-kind drivers | `A6FrameCodec`, `A6Command`, `A6PacketAssembler`, `PairStateMachine`, `SessionStateMachine`, `WeightRecordParser`, `DeviceDriver`, `DriverRegistry`, `ScaleDriver`, `WatchDriver`, `BulbDriver`, `DfuStateMachine`, `BodyComposer`, `BodyCalibration` |
+| `DeviceCore` (iOS app layer) | One shared `CBCentralManager` for every driver; normalizes CB callbacks into `CentralEvent`s; persistent device inventory | `DeviceTransport`, `TransportPeripheralDelegate`, `DeviceStore` (`devices.json`), `PairedDevice` |
+| `Domain` (iOS) | User profiles, measurements, body-composition, export | `Person`, `MeasurementRecord`, `PersonStore`, `MeasurementStore`, `BindStore`, `ScaleConfigStore`, `HealthKitWriter`, `CSVExport` |
+| `UI` (SwiftUI) | Devices hub (home) + per-driver feature views | `DevicesHubView`, `AddDeviceSheet`, `MainTabView` (scale tabs: Measure/History/Device), `CalibrationView`, `DfuView` |
 
-**Dependency rule:** `UI → Domain → ScaleKit → BlePort` (interface). ScaleKit never touches platform APIs directly.
+**Dependency rule:** `UI → DeviceCore → ScaleKit` (interfaces only). ScaleKit has zero platform dependencies (`swift test` runs on macOS); CoreBluetooth types never cross into drivers — they are normalized into `AdvertisementSnapshot`/`CentralEvent` by `DeviceTransport`.
 
-## 3. ScaleKit internals
+### 2.1 Adding a device kind (SRD-009 acceptance criterion 4)
+
+1. Implement `DeviceDriver` (`kind`, `displayName`, `summary`, `makeScanner()`, `makeSession()`).
+2. Register it in `FireflyDrivers.registry` (`DevicesHubView.swift`) — one line.
+3. Add the driver's feature views; route them in `driverDestination`.
+
+No edits to the hub, transport, or any other driver.
+
+## 3. ScaleKit internals — scale protocol (SRD-001…008)
 
 ### 3.1 Frame codec (port of `DeviceDataPackage` + `A6ProtocolParser`)
 
@@ -74,11 +82,11 @@ Port of `FatScalePairWorker` flow with states: `CONNECT → DISCOVER → ENABLE_
 ## 4. Data model (local store)
 
 ```
-UserProfile(id, name, sex, age, heightCm, athlete, activityLevel, unit, targetKg?, scaleSlot 0..4)
-Measurement(id, profileId?, deviceId, utcEpoch, weightKg, impedanceOhm?, unitRaw, rawFlags,
-            source: live|history, createdAt)
-BindRecord(deviceKey, macString, peripheralIdentifier?, deviceId(12hex), slot, fwVersion,
-           featureBitmap?, boundAt, lastSeenAt)
+Person(id, name, sexMale, age, heightCm, targetWeightKg?, preferredSlot, isActive, isMe)
+MeasurementRecord(id, deviceId, slot, weightKg, impedanceOhm?, utc, unitRaw, rawFlags,
+                  source: live|drain, personId?)
+BindRecord(mac, deviceId(12hex), peripheralId?, slot, fwVersion, featureBitmap?, boundAt)
+PairedDevice(peripheralId, kind, name, addedAt)   // devices.json — SRD-009 inventory
 ```
 
 - `deviceKey` = MAC string from advertisement (stable across platforms, see §6).
@@ -108,7 +116,7 @@ Captured with `analysis/tools/ble_scan.swift` (CoreBluetooth scan, 60 s):
 
 ## 7. Platform notes
 
-- **iOS**: CoreBluetooth central; background scan not needed v1; `NSBluetoothAlwaysUsageDescription`; State Restoration for long history drains (v2).
+- **iOS**: one CoreBluetooth central (`DeviceTransport`) shared by all drivers; per-driver flows keep their own pipelines (`ScaleCentral` is wire-verified and intentionally self-contained — SRD-009 FR-5); `NSBluetoothAlwaysUsageDescription`; State Restoration for long history drains (v2).
 - **Android**: `BLUETOOTH_SCAN`+`BLUETOOTH_CONNECT` (12+), location permission only ≤11; single foreground service for sync (user-initiated).
 - **MTU**: protocol is 20-byte ATT-native (18 B payload frames); request larger MTU opportunistically but the official init caps at 20 (`WeightInitForA6.setMtu(20)` observed) — keep 20-byte framing regardless.
 

@@ -14,7 +14,7 @@ enum CSVExporter {
         var rows = ["utc,weight_kg,impedance_ohm,device_id,slot,person"]
         for r in records.sorted(by: { $0.utc < $1.utc }) {
             let person = people.first { $0.id == r.personId }?.name ?? ""
-            var cols = [f.string(from: r.utc),
+            let cols = [f.string(from: r.utc),
                         String(format: "%.2f", r.weightKg),
                         r.impedanceOhm.map(String.init) ?? "",
                         r.deviceId,

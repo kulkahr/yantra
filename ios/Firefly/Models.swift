@@ -68,7 +68,7 @@ final class MeasurementStore {
     @discardableResult
     func insert(_ rec: MeasurementRecord) -> Bool {
         queue.sync {
-            var all = cache ?? (try? loadLocked()) ?? []
+            var all = cache ?? (loadLocked() ?? [])
             let dup = all.contains {
                 $0.deviceId == rec.deviceId
                     && abs($0.utc.timeIntervalSince(rec.utc)) < 1.0
@@ -88,7 +88,7 @@ final class MeasurementStore {
     @discardableResult
     func update(_ rec: MeasurementRecord) -> Bool {
         queue.sync {
-            var all = cache ?? (try? loadLocked()) ?? []
+            var all = cache ?? (loadLocked() ?? [])
             guard let i = all.firstIndex(where: { $0.id == rec.id }) else { return false }
             all[i] = rec
             cache = all
@@ -101,7 +101,7 @@ final class MeasurementStore {
     @discardableResult
     func delete(id: UUID) -> Bool {
         queue.sync {
-            var all = cache ?? (try? loadLocked()) ?? []
+            var all = cache ?? (loadLocked() ?? [])
             let before = all.count
             all.removeAll { $0.id == id }
             guard all.count < before else { return false }

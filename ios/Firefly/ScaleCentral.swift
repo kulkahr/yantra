@@ -9,6 +9,10 @@ import ScaleKit
 ///   `0x4801` arm → records stream as real-time `0x4802`.
 final class ScaleCentral: NSObject, ObservableObject {
 
+    /// SRD-009: shared instance so the Devices hub (and future drivers) can
+    /// reach the scale flow without owning the object graph.
+    static let shared = ScaleCentral()
+
     // MARK: - Published UI state
 
     enum Stage: Equatable {
@@ -75,6 +79,8 @@ final class ScaleCentral: NSObject, ObservableObject {
     private var sessionMachine: SessionStateMachine?
     private var watchdog: DispatchSourceTimer?
     private let watchdogQueue = DispatchQueue(label: "firefly.watchdog")
+    /// SRD-001 FR-5: foreground scan auto-stops after 30 s (official duty-cycle parity).
+    private var scanTimeout: DispatchWorkItem?
     /// `--arm` parity: send `0x4801` once the machine reaches `.live`
     /// (wire fact #5 — records only flow after start-measurement).
     private var pendingArm = false
@@ -100,12 +106,27 @@ final class ScaleCentral: NSObject, ObservableObject {
         foundScales = []
         stage = .scanning
         guard central.state == .poweredOn else { return }
+        scheduleScanTimeout()
         // Duplicate filtering ON — one didDiscover row per physical scale; RSSI
         // refresh handled in didDiscover (keyed by peripheral.identifier).
         central.scanForPeripherals(withServices: [cbuuid(GATT.a6Service)], options: nil)
     }
 
+    /// SRD-001 FR-5 — 30 s foreground scan window, cancellable.
+    private func scheduleScanTimeout() {
+        scanTimeout?.cancel()
+        let t = DispatchWorkItem { [weak self] in
+            guard let self, self.stage == .scanning else { return }
+            self.stopScan()
+            self.appendLog("scan timed out (30 s)")
+        }
+        scanTimeout = t
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: t)
+    }
+
     func stopScan() {
+        scanTimeout?.cancel()
+        scanTimeout = nil
         central.stopScan()
         if stage == .scanning { stage = .idle }
     }
@@ -125,6 +146,20 @@ final class ScaleCentral: NSObject, ObservableObject {
             startScan()   // connects from didDiscover once seen
             stage = .connecting
         }
+    }
+
+    /// SRD-009 hub entry point: adopt a scale discovered by the driver
+    /// registry's scanner and immediately run the standard bind handshake
+    /// (slot 1 per issue #12 — user→slot mapping lives in People).
+    func adoptDiscovered(_ adv: AdvertisementSnapshot) {
+        guard let mac = ScaleCentral.macFromMfg(adv.manufacturerData), !mac.isEmpty else {
+            stage = .failed("scale advertised no MAC — move closer and retry")
+            return
+        }
+        let scale = DiscoveredScale(id: adv.peripheralId,
+                                    name: adv.name ?? "Smart Scale",
+                                    mac: mac, rssi: adv.rssi)
+        bind(scale, slot: 1)
     }
 
     /// Open a weigh-in session with the bound scale (SRD-003).
