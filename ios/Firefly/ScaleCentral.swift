@@ -49,6 +49,8 @@ final class ScaleCentral: NSObject, ObservableObject {
     private var readResults: [UUID: Data] = [:]
     private var disconnectRequested = false
     private var connectTarget: (id: UUID, mac: String)?
+    /// Scale user slot used by the running session (active person's slot when set).
+    private var sessionSlot: Int?
     /// Scale being bound (peripheral id + slot) — persisted into the bind record
     /// so later sessions can `retrievePeripherals(withIdentifiers:)` directly.
     private var pendingBind: (scaleId: UUID, slot: Int)?
@@ -63,8 +65,16 @@ final class ScaleCentral: NSObject, ObservableObject {
     /// (wire fact #5 — records only flow after start-measurement).
     private var pendingArm = false
 
-    /// Profile for user-info push + body composition (SRD-005, ProfileStore-backed).
-    var profile: SessionStateMachine.UserProfile { ProfileStore.shared.machineProfile }
+    /// Profile for the user-info push (0x1001) — the ACTIVE person's metrics,
+    /// falling back to the global ProfileStore for unset fields / no person.
+    var profile: SessionStateMachine.UserProfile {
+        let defaults = ProfileStore.shared
+        guard let p = PersonStore.shared.activePerson else { return defaults.machineProfile }
+        return SessionStateMachine.UserProfile(
+            sexMale: p.sexMale ?? defaults.sexMale,
+            age: p.age ?? defaults.age,
+            heightMeters: (p.heightCm ?? defaults.heightCm) / 100)
+    }
 
     // MARK: - Public API
 
@@ -157,6 +167,7 @@ final class ScaleCentral: NSObject, ObservableObject {
         pairMachine = nil
         sessionMachine = nil
         pendingArm = false
+        sessionSlot = nil
     }
 
     private func beginReadsIfNeeded() {
@@ -239,11 +250,15 @@ final class ScaleCentral: NSObject, ObservableObject {
             performAll(pairOut.actions)
             appendLog("pair machine started (fw \(effectiveFw))")
         case .session(let slot, let arm):
+            // Multi-user: the ACTIVE person's slot drives 0x4801 arm + user-info
+            // push, so the scale attributes the measurement to that slot.
+            let activeSlot = PersonStore.shared.activePerson?.slot ?? slot
+            sessionSlot = activeSlot
             var m = SessionStateMachine(config: .init(
                 mac: mac, firmwareVersion: effectiveFw,
                 deviceId: BindStore.shared.record?.deviceId
                     ?? mac.replacingOccurrences(of: ":", with: "").lowercased(),
-                slot: slot, unit: .kg, profile: profile,
+                slot: activeSlot, unit: .kg, profile: profile,
                 utcProvider: { UInt32(Date().timeIntervalSince1970) },
                 timeZoneHex: {
                     // (offsetMinutes / 15) + 48 — wire-verified (IST → 0x46).
@@ -357,9 +372,13 @@ final class ScaleCentral: NSObject, ObservableObject {
 
     private func collectRecords(_ out: SessionStateMachine.Output) {
         guard let deviceId = BindStore.shared.record?.deviceId else { return }
-        let slot = BindStore.shared.record?.slot ?? 1
+        let slot = sessionSlot ?? BindStore.shared.record?.slot ?? 1
+        // Weigh-ins are attributed to the ACTIVE person chosen at session start
+        // (nil when nobody is active — History then asks who each record is for).
+        let personId = PersonStore.shared.activePersonId
         for rec in out.measurements {
-            let stored = MeasurementRecord(deviceId: deviceId, slot: slot, from: rec)
+            let stored = MeasurementRecord(deviceId: deviceId, slot: slot,
+                                           personId: personId, from: rec)
             if MeasurementStore.shared.insert(stored) {
                 recordCount += 1
                 lastRecord = stored

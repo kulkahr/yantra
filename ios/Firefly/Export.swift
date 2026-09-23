@@ -4,17 +4,22 @@ import ScaleKit
 
 /// CSV export of stored measurements (SRD-004 FR-6 — explicit user action only).
 enum CSVExporter {
-    static func export(records: [MeasurementRecord]) -> String {
+    static func export(records: [MeasurementRecord], people: [Person] = []) -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd HH:mm:ss"
         f.timeZone = .current
-        var rows = ["utc,weight_kg,impedance_ohm,device_id,slot"]
+        func csv(_ s: String) -> String {
+            s.contains(",") || s.contains("\"") ? "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" : s
+        }
+        var rows = ["utc,weight_kg,impedance_ohm,device_id,slot,person"]
         for r in records.sorted(by: { $0.utc < $1.utc }) {
+            let person = people.first { $0.id == r.personId }?.name ?? ""
             var cols = [f.string(from: r.utc),
                         String(format: "%.2f", r.weightKg),
                         r.impedanceOhm.map(String.init) ?? "",
                         r.deviceId,
-                        String(r.slot)]
+                        String(r.slot),
+                        csv(person)]
             rows.append(cols.joined(separator: ","))
         }
         return rows.joined(separator: "\n")
