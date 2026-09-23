@@ -215,7 +215,7 @@ public struct PairStateMachine {
             case .disconnecting:
                 transition(to: .done)
                 return Output()
-            case .failed(let e):
+            case .failed:
                 return Output()   // already terminal
             default:
                 transition(to: .failed(.protocolError("unexpected disconnect")))
