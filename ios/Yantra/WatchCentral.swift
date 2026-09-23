@@ -39,6 +39,22 @@ final class WatchCentral: NSObject, ObservableObject {
     @Published private(set) var hrDated: [(date: Date, sample: KahaProtocol.HRSample)] = []
     /// UI-facing samples (compat view of `hrDated`).
     var hrSamples: [KahaProtocol.HRSample] { hrDated.map { $0.sample } }
+    /// Watch-face ids on the device + currently active one (#22).
+    @Published private(set) var watchFaceIds: [Int] = []
+    @Published private(set) var currentWatchFaceId: Int?
+    /// Watch-side control events for the UI to react to (#25/#26/#30).
+    @Published private(set) var lastWatchEvent: KahaProtocol.WatchControlEvent?
+    /// True once the watch ACKed our settings burst after the handshake (#31).
+    @Published private(set) var pairedConfirmed = false
+    /// Latest workout summary days pulled (#28), most recent first.
+    @Published private(set) var workoutDays: [WorkoutDay] = []
+
+    struct WorkoutDay: Identifiable, Equatable {
+        let id: Int            // daysAgo
+        let steps: Int
+        let calories: Double
+        let distanceMeters: Double
+    }
     @Published private(set) var foundWatches: [DiscoveredWatch] = []
 
     struct DiscoveredWatch: Identifiable, Equatable {
@@ -222,15 +238,21 @@ final class WatchCentral: NSObject, ObservableObject {
         send(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getFirmwareVersion))
         send(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getDeviceTime))
         send(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getBatteryLevel))
-        // 24-hour format (harmless personalization, Crest parity).
+        // 24-hour format + phone-type (Crest connect parity — the watch
+        // treats 00 A6 05 00 00 as "phone paired, settings may flow").
         send(KahaProtocol.frame(classId: KahaProtocol.ClassId.info,
                                 cmdId: KahaProtocol.InfoCmd.set24HourFormat,
                                 payload: [0x00]))
-        // Resync the watch clock to the phone.
+        send(KahaProtocol.frame(classId: KahaProtocol.ClassId.info, cmdId: 0xA6, payload: [0x00]))
+        // Resync the watch clock to the phone (#20).
         send(KahaProtocol.setDeviceTime(from: Date()))
         handshakeDone = true
+        pairedConfirmed = true
         stage = .live
-        appendLog("watch live — awaiting pushes")
+        appendLog("watch live — paired & synced")
+        // Kick off the watch-face inventory (#22).
+        send(KahaProtocol.requestWatchFaceList())
+        send(KahaProtocol.requestCurrentWatchFace())
     }
 
     private func handleFrame(_ frame: KahaProtocol.Frame) {
@@ -268,9 +290,100 @@ final class WatchCentral: NSObject, ObservableObject {
             } else {
                 appendLog("SpO2 history: no valid samples")
             }
+        case (KahaProtocol.ClassId.fitness, 0x23):
+            // Workout day summary (#28): steps u32 + meters f32 + kcal f32.
+            if let day = decodeWorkoutSummary(frame.payload) {
+                workoutDays.insert(day, at: 0)
+                appendLog("workout day -\(day.id): \(day.steps) steps · \(Int(day.distanceMeters)) m")
+            }
+        case (KahaProtocol.ClassId.alerts, KahaProtocol.SystemCmd.watchFaceList):
+            watchFaceIds = KahaProtocol.decodeWatchFaceList(frame.payload)
+            appendLog("watch faces: \(watchFaceIds.map(String.init).joined(separator: ", "))")
+        case (KahaProtocol.ClassId.alerts, KahaProtocol.SystemCmd.watchFaceCurrent):
+            currentWatchFaceId = KahaProtocol.decodeCurrentWatchFace(frame.payload)
         default:
+            if let event = KahaProtocol.decodeWatchControl(frame) {
+                lastWatchEvent = event
+                handleWatchEvent(event)
+                return
+            }
             handleInfoResponse(frame)
         }
+    }
+
+    /// `01 23` workout-day payload: steps u32 LE, meters f32, kcal f32
+    /// (mirrors TodaysFitnessDataRes / LiveStepsRes field order).
+    private func decodeWorkoutSummary(_ p: [UInt8]) -> WorkoutDay? {
+        guard p.count >= 12 else { return nil }
+        let steps = Int(p[0]) | (Int(p[1]) << 8) | (Int(p[2]) << 16) | (Int(p[3]) << 24)
+        return WorkoutDay(id: hrDay, steps: steps,
+                          calories: Double(KahaProtocol.leFloat(p, 8)),
+                          distanceMeters: Double(KahaProtocol.leFloat(p, 4)))
+    }
+
+    /// Reacts to watch-initiated control pushes (#25/#26/#30).
+    private func handleWatchEvent(_ event: KahaProtocol.WatchControlEvent) {
+        switch event {
+        case .findMyPhone:
+            appendLog("watch asks: find my phone")
+            // Haptic + alert are UI concerns; state is published above.
+        case .cameraEnter:
+            appendLog("watch: camera remote entered")
+        case .cameraCapture:
+            appendLog("watch: shutter request")
+        case .callReject, .callMute:
+            let action = (event == .callReject) ? "reject" : "mute"
+            appendLog("watch: call \(action)")
+        case .musicPlay, .musicPause, .musicNext, .musicPrevious,
+             .volumeUp, .volumeDown:
+            appendLog("watch music: \(event)")
+        }
+    }
+
+    // MARK: - Phone → watch controls (#23/#24/#25/#26/#30)
+
+    func sendNotification(title: String, body: String, type: UInt8 = 18) {
+        let text = title.isEmpty ? body : "\(title): \(body)"
+        for f in KahaProtocol.sendMessage(String(text.prefix(58)), type: type) {
+            send(f)
+        }
+    }
+
+    func setNotificationApps(_ apps: KahaProtocol.AlertApps) {
+        send(KahaProtocol.setAlertSwitches(apps))
+        appendLog("alert switches → 0x\(String(apps.rawValue, radix: 16))")
+    }
+
+    func sendIncomingCall(caller: String) {
+        sendNotification(title: "", body: caller, type: 1)
+    }
+
+    func musicPlayback(playing: Bool) {
+        send(KahaProtocol.setMusicPlayback(playing: playing))
+    }
+
+    func musicVolume(_ percent: Int) {
+        send(KahaProtocol.setMusicVolume(percent: percent))
+    }
+
+    func cameraRemote(enter: Bool) {
+        send(KahaProtocol.setCameraRemote(enter: enter))
+    }
+
+    func findMyWatch(start: Bool) {
+        send(KahaProtocol.findMyWatch(start: start))
+    }
+
+    func switchWatchFace(_ id: Int) {
+        send(KahaProtocol.setWatchFace(id: id))
+        appendLog("watch face → \(id)")
+    }
+
+    func loadWorkoutDays(_ days: [Int]) {
+        for d in days {
+            send(KahaProtocol.requestWorkoutSummary(daysAgo: d))
+        }
+        appendLog("workout summaries requested: \(days)")
     }
 
     // MARK: - Persistence (WatchStore, SRD-010 FR-2)

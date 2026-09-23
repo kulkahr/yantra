@@ -12,17 +12,40 @@ struct WatchView: View {
         List {
             connectionSection
             if watch.stage == .live {
+                if watch.pairedConfirmed {
+                    Label("Watch shows “Paired” — settings & clock synced",
+                          systemImage: "checkmark.seal.fill")
+                        .font(.footnote).foregroundStyle(.green)
+                }
                 liveSection
                 historySection
                 sleepSection
                 spo2Section
+                workoutsSection
+                watchFaceSection
+                controlsSection
                 storedSection
                 deviceSection
             }
             logSection
         }
         .navigationTitle(watch.deviceName ?? "Smart Watch")
+        .alert("Find my phone", isPresented: $findPhoneAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Your watch is looking for the phone.")
+        }
+        .onChange(of: watch.lastWatchEvent) { _, e in
+            if e == .findMyPhone { findPhoneAlert = true }   // #30
+        }
     }
+
+    @State private var findPhoneAlert = false
+    @State private var notifText = ""
+    @State private var callerName = ""
+    @State private var cameraActive = false
+    @State private var findingWatch = false
+    @State private var exportStatus: String?
 
     // MARK: Sections
 
@@ -211,6 +234,98 @@ struct WatchView: View {
         }
     }
 
+    private var workoutsSection: some View {
+        Section {
+            if watch.workoutDays.isEmpty {
+                Text("Pull workout day summaries from the watch.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Load last 7 days") { watch.loadWorkoutDays([0, 1, 2, 3, 4, 5, 6]) }
+            } else {
+                ForEach(watch.workoutDays) { d in
+                    HStack {
+                        Image(systemName: "figure.run").foregroundStyle(.orange)
+                        VStack(alignment: .leading) {
+                            Text(d.id == 0 ? "Today" : "-\(d.id) d")
+                            Text("\(d.steps) steps · \(String(format: "%.0f", d.distanceMeters)) m · \(String(format: "%.0f", d.calories)) kcal")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        } header: {
+            Text("Workouts (#28)")
+        }
+    }
+
+    private var watchFaceSection: some View {
+        Section {
+            if watch.watchFaceIds.isEmpty {
+                Text("No watch-face inventory pulled yet.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Picker("Active face", selection: faceSelection) {
+                    ForEach(watch.watchFaceIds, id: \.self) { id in
+                        Text("Face \(id)").tag(Int?.some(id))
+                    }
+                }
+            }
+        } header: {
+            Text("Watch face (#22)")
+        } footer: {
+            Text("Switches the active watch face by id (upload of custom faces is not supported).")
+        }
+    }
+
+    private var faceSelection: Binding<Int?> {
+        Binding(
+            get: { watch.currentWatchFaceId ?? watch.watchFaceIds.first },
+            set: { if let id = $0 { watch.switchWatchFace(id) } }
+        )
+    }
+
+    private var controlsSection: some View {
+        Section {
+            // Phone → watch notification test (#23)
+            TextField("Notification text…", text: $notifText)
+            Button("Send to watch") {
+                watch.sendNotification(title: "Yantra", body: notifText)
+                notifText = ""
+            }
+            .disabled(notifText.isEmpty)
+            // Incoming call simulation (#24)
+            TextField("Caller name…", text: $callerName)
+            Button("Send incoming call") {
+                watch.sendIncomingCall(caller: callerName)
+            }
+            .disabled(callerName.isEmpty)
+            // Music control ack (#26)
+            HStack {
+                Button("Music ▶") { watch.musicPlayback(playing: true) }
+                Button("⏸") { watch.musicPlayback(playing: false) }
+                Button("Vol +") { watch.musicVolume(80) }
+            }
+            .buttonStyle(.bordered)
+            // Camera remote (#25)
+            Button(cameraActive ? "Leave camera remote" : "Enter camera remote") {
+                watch.cameraRemote(enter: !cameraActive)
+                cameraActive.toggle()
+            }
+            // Find my watch (#30, watch side rings)
+            Button(findingWatch ? "Stop ringing" : "Ring my watch") {
+                watch.findMyWatch(start: !findingWatch)
+                findingWatch.toggle()
+            }
+            // Notification app switches
+            Button("Enable call/SMS/WhatsApp alerts") {
+                watch.setNotificationApps([.call, .sms, .whatsapp])
+            }
+        } header: {
+            Text("Phone → watch controls")
+        } footer: {
+            Text("Watch-side pushes (shutter, music buttons, find-phone) are handled automatically and logged.")
+        }
+    }
+
     private var storedSection: some View {
         Section("Stored days (local)") {
             let stored = WatchStore.shared.days
@@ -218,6 +333,15 @@ struct WatchView: View {
                 Text("Pulled history is saved locally day by day.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
+                // Issue #29: push stored watch metrics into HealthKit.
+                Button {
+                    exportStatus = HealthKitWriter.writeWatchDays(stored)
+                } label: {
+                    Label("Export to Health", systemImage: "heart.text.square.fill")
+                }
+                if let exportStatus {
+                    Text(exportStatus).font(.caption).foregroundStyle(.secondary)
+                }
                 ForEach(stored.prefix(7)) { d in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack {
