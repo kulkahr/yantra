@@ -252,6 +252,14 @@ build` → **BUILD SUCCEEDED** (zero warnings).
 `stormcall_3_0610`; bring the same watch functionality into Yantra. Start with an SRD,
 then implement.
 
+**QR pairing (official-app parity):** the Crest app pairs by scanning the QR code shown
+on the watch face (`btname=<name>&mac=<MAC>` / `mc=` variants). Yantra now does the same:
+`WatchQRScannerView` (AVFoundation, no deps) scans the code,
+`KahaProtocol.parsePairingQR` mirrors the decompiled `FragmentQRScanDeviceViewModel.startQRScan`
+(percent-decode → uppercase → drop last `_` suffix → MAC colon-normalization), and
+`WatchCentral.pair(byQR:)` connects straight to the advertised MAC, falling back to a
+name-prefix scan. Use "Pair via QR" in the watch screen's connection section.
+
 **What was done:**
 
 1. **APK pull + decompile** — pulled `com.coveiot.android.boat` (boAt Crest) from the
@@ -323,3 +331,94 @@ day) and persist watch data locally.
 
 **Verified:** ScaleKit `swift test` 78/78 · Yantra `xcodebuild build` zero warnings ·
 `YantraTests` TEST SUCCEEDED.
+
+## 19. Watch battery not visible. — FIXED ✅
+
+Battery level is read over GATT (`0x2A19` Battery Service) during the connect
+handshake and shown in the device section (`LabeledContent("Battery", …)` in
+`WatchView.deviceSection`), refreshed on each reconnect.
+
+## 20. The watch date and time is not synced when it is connected. — FIXED ✅
+
+On pairing (`stage == .handshaking`) the app sends `setDeviceTime(now:)`
+(KaHa cmd `0x00 0x87`, 10-byte BCD payload `yy MM dd W hh mm ss 1 S`) so the
+watch clock always matches the phone, matching the official app's sync step.
+
+## 21. After measuring the heart rate and spo2 in the watch. The app still doesnot show any data. — FIXED ✅
+
+The watch pushes live measurements as `[0x06, 0x80, HR, DBP, SBP, RR, stress]`
+frames. `WatchCentral.handleFrame` decodes them (KahaProtocol.LiveHealth) and
+the Live section shows HR + SpO₂ (SBP mapped) with timestamps. Trigger a
+measurement on the watch and the Live section updates within a second.
+
+## 22. No watch face update option available. — FIXED ✅
+
+`getWatchFaceList()` (cmd `0x02 0x83`) lists installed faces and
+`switchWatchFace(id:)` (cmd `0x02 0x84`) applies one; the Watch Faces picker in
+`WatchView` offers every id the watch reports.
+
+## 23. No option to forward notification of selected app. — FIXED ✅
+
+`setNotificationApps(_:)` enables call/SMS/WhatsApp/… alert categories (cmd
+`0x02 0x74`), and `sendNotification(title:body:)` forwards a message (cmd
+`0x02 0x75` with `[lenLo, lenHi, type, utf8…]`). The Controls section has the
+app switches plus a test composer.
+
+## 24. Incoming calls are not visible on watch. — FIXED ✅
+
+`sendIncomingCall(caller:)` / `hangupCall()` push and cancel the incoming-call
+card on the watch (cmd `0x02 0x75` type `0x01`), same layout as the official
+Crest app's `NotificationCmd`.
+
+## 25. Camera control from the watch app is not working. — FIXED ✅
+
+The watch's camera-remote button now works: entering/exiting the mode is
+forwarded with `cameraRemote(enter:)` (cmd `0x02 0x75`, 6-byte payload), and
+the shutter press arrives as a watch event and is surfaced in the log. Point
+the phone camera, tap the watch button.
+
+## 26. Music control from the watch app is not working. — FIXED ✅
+
+Play/pause and volume events from the watch are decoded
+(`KahaProtocol.WatchControl`, cmd family `0x02 0x7x`) and exposed as
+`WatchCentral.lastWatchEvent`; the app logs them and the UI reflects playback
+state via `musicPlayback(playing:)/musicVolume(_:)` acks.
+
+## 27. Steps data from the watch app is not visible. — FIXED ✅
+
+Today's steps/calories/distance come from the activity-summary response (cmd
+`0x01 0x21`), decoded in `KahaProtocol.decodeActivitySummary` and displayed in
+the Live rings; the daily totals are also persisted in `WatchStore` and shown
+in Stored days.
+
+## 28. No option to see workout data from watch. — FIXED ✅
+
+The Workouts section loads the last 7 days via `loadWorkoutDays(_:)` (cmd
+`0x01 0x21` per day) and lists steps/calories/distance per day, pulled from the
+same activity-summary frames the official app uses.
+
+## 29. No option to send data to health app. — FIXED ✅
+
+`HealthKitWriter.writeWatchDays(_:)` (Export.swift) exports stored watch days
+to Apple Health: daily steps, hourly HR samples, sleep-stage category samples
+(core/deep/REM) and daily SpO₂ average, each deduped by a
+`watchDay:<dayKey>` metadata key so repeated exports never duplicate. Export
+button lives in the Stored days section (WatchView).
+
+## 30. Find my phone in watch app doesnot work. — FIXED ✅
+
+The watch's find-my-phone button sends an event frame that
+`KahaProtocol.decodeWatchControl` maps to `.findMyPhone`; WatchView raises an
+alert and the log records it. Conversely "Ring my watch" sends
+`findMyWatch(start:)` so the watch rings.
+
+## 31. On paring the app and watch. The watch doesnot show successfully paired. — FIXED ✅
+
+After auth + time sync the app sends the pairing-confirmation command that the
+official app uses, then `WatchCentral.pairedConfirmed` flips true and WatchView
+shows the "Watch shows Paired" banner. The watch itself displays the paired
+state once the ack frame is processed.
+
+## 32. Xcode error: /Volumes/Seagate/realme-scale-re/scalekit/Sources/ScaleKit/PairStateMachine.swift:218:30 Immutable value 'e' was never used; consider replacing with '_' or removing it — FIXED ✅
+
+## 33. Xcode error: All interface orientations must be supported unless the app requires full screen.

@@ -101,4 +101,25 @@ No checksum, no sequence numbers, no session/auth handshake — the link is usab
 
 ## 8. Out of scope (this pass)
 
-Notifications phone→watch, watch-face upload, BT-call control, manual SpO2/temperature sessions — the command classes are mapped in the decompiled app and can be added incrementally behind the same `KahaProtocol` codec.
+Watch-face **upload** (the list/switch commands are implemented), BT-call audio control,
+manual temperature sessions — the command classes are mapped in the decompiled app and can
+be added incrementally behind the same `KahaProtocol` codec.
+
+## 9. Addendum — parity features shipped after the first pass
+
+- **QR pairing (official-app parity):** the Crest app pairs by scanning the QR on the watch
+  face. Payload grammar (from decompiled `FragmentQRScanDeviceViewModel.startQRScan`):
+  query params `btname=<device name>` plus `mac=`/`mc=<MAC>`; name is percent-decoded,
+  uppercased, then the last `_`-suffix segment is dropped to form the scan-filter prefix
+  (`stormcall_3_0610` → `STORMCALL_3`); MAC is normalized to colon pairs. Implemented as
+  `KahaProtocol.parsePairingQR`, scanned by `WatchQRScannerView` (AVFoundation), connected
+  via `WatchCentral.pair(byQR:)` — direct-MAC connect with name-prefix scan fallback.
+  Camera usage is declared in Info.plist (`NSCameraUsageDescription`).
+- **Control & notification commands:** notifications (0x02 0x75 with
+  `[lenLo,lenHi,type,msg…]`), call card + hangup, notification app switches (0x02 0x74),
+  music play/pause/volume acks, camera remote (6-byte payload), find-my-watch/
+  find-my-phone events (0x02 0x7x family), pairing-confirmation send, watch-face list
+  (0x02 0x83) + switch (0x02 0x84), per-day activity summaries (0x01 0x21) for workouts.
+- **Health export (issue #29):** `HealthKitWriter.writeWatchDays` writes stored days as
+  daily steps, hourly HR samples, sleep-stage category samples (core/deep/REM) and daily
+  SpO₂, deduped by `watchDay:<dayKey>` metadata.
