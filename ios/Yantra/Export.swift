@@ -67,4 +67,69 @@ enum HealthKitWriter {
         }
         return "Writing \(records.count) sample(s) to Health (skipping already saved)…"
     }
+
+    /// Issue #29: export persisted watch metrics (WatchStore) into HealthKit.
+    /// Steps per day, HR samples, sleep-analysis stages and SpO2, each with a
+    /// dedupe metadata key `watchDay:<dayKey>` so re-exports never duplicate.
+    static func writeWatchDays(_ days: [WatchDayRecord]) -> String {
+        guard HKHealthStore.isHealthDataAvailable() else {
+            return "HealthKit unavailable on this device"
+        }
+        guard !days.isEmpty else { return "No watch data to export" }
+        let types = Set([
+            HKQuantityType(.stepCount), HKQuantityType(.heartRate),
+            HKCategoryType(.sleepAnalysis), HKQuantityType(.oxygenSaturation),
+        ])
+        let store = HKHealthStore()
+        store.requestAuthorization(toShare: types, read: types) { ok, _ in
+            guard ok else { return }
+            DispatchQueue.main.async {
+                for day in days { exportDay(day, store: store) }
+            }
+        }
+        return "Writing \(days.count) day(s) of watch data to Health…"
+    }
+
+    private static func exportDay(_ day: WatchDayRecord, store: HKHealthStore) {
+        let cal = Calendar.current
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: day.dayStart) ?? day.dayStart
+        let meta = [recordIdKey: "watch\(day.dayKey)"]
+
+        // Steps as one cumulative sample across the day.
+        if day.steps > 0 {
+            let type = HKQuantityType(.stepCount)
+            store.save(HKQuantitySample(type: type,
+                                        quantity: HKQuantity(unit: .count(), doubleValue: Double(day.steps)),
+                                        start: day.dayStart, end: dayEnd, metadata: meta), withCompletion: { _, _ in })
+        }
+        // Hourly heart-rate samples.
+        let hrType = HKQuantityType(.heartRate)
+        for (hour, bpm) in day.hrByHour where bpm > 0 {
+            guard let start = cal.date(bySettingHour: hour, minute: 0, second: 0,
+                                       of: day.dayStart) else { continue }
+            let end = start.addingTimeInterval(3600)
+            store.save(HKQuantitySample(type: hrType,
+                                        quantity: HKQuantity(unit: HKUnit.count().unitDivided(by: .minute()), doubleValue: Double(bpm)),
+                                        start: start, end: end, metadata: meta), withCompletion: { _, _ in })
+        }
+        // Sleep stages as category samples (light->asleepCore, deep->asleepDeep, REM->asleepREM).
+        let sleepType = HKCategoryType(.sleepAnalysis)
+        var cursor = day.dayStart
+        for (mins, stage) in [(day.sleepLightMinutes, HKCategoryValueSleepAnalysis.asleepCore),
+                             (day.sleepDeepMinutes, HKCategoryValueSleepAnalysis.asleepDeep),
+                             (day.sleepRemMinutes, HKCategoryValueSleepAnalysis.asleepREM)] where mins > 0 {
+            let end = cursor.addingTimeInterval(mins * 60)
+            let sample = HKCategorySample(type: sleepType, value: stage.rawValue,
+                                          start: cursor, end: end, metadata: meta)
+            store.save(sample, withCompletion: { _, _ in })
+            cursor = end
+        }
+        // Daily SpO2 average.
+        if let spo2 = day.spo2Average, spo2 > 0 {
+            let type = HKQuantityType(.oxygenSaturation)
+            store.save(HKQuantitySample(type: type,
+                                        quantity: HKQuantity(unit: .percent(), doubleValue: Double(spo2) / 100),
+                                        start: day.dayStart, end: dayEnd, metadata: meta), withCompletion: { _, _ in })
+        }
+    }
 }
