@@ -119,37 +119,28 @@ public enum ConfigEcho {
     }
 }
 
-/// Battery voltage → percent mapping (SRD-006 §2). Raw `A640` byte:
-/// `V = raw/100 + 1.6`. Percent uses the S11 LiSOCl2-style discharge curve
-/// approximation (official aborts DFU ≤ 10 %; low-battery < 2.8 V ≈ < 20 %).
+/// Battery semantics for the scale's `A640` read (SRD-006 FR-3).
+///
+/// **Decompiled ground truth (issue #15):** `FatScaleWorker.readDeviceVoltage`
+/// → `DataParseUtils.parseWeightScaleVoltage(bArr)` returns `bArr[0]` and the
+/// official app logs it as `voltagePercent` (DFU aborts when ≤ 10). The
+/// `raw/100 + 1.6 V` conversion in `ByteDataParser.toBatteryVoltage` belongs
+/// to the **2-byte pedometer voltage fields**, not the scale's `A640` byte.
+/// The raw byte is therefore a 0–100 percent directly; the volts formula is
+/// kept only as an informational estimate.
 public enum Battery {
+    /// Informational volts estimate (`ByteDataParser` curve) — NOT the UI value.
     public static func volts(rawByte: Int) -> Double {
         Double(rawByte & 0xFF) / 100.0 + 1.6
     }
 
-    /// Piecewise-linear map over the usable 2.5–3.6 V window (clamped 0–100).
-    public static func percent(volts: Double) -> Int {
-        let points: [(v: Double, pct: Double)] = [
-            (2.5, 0), (2.6, 5), (2.7, 10), (2.8, 20), (2.9, 35),
-            (3.0, 55), (3.1, 75), (3.3, 90), (3.6, 100),
-        ]
-        guard volts > points[0].v else { return 0 }        // ≤ 2.5 V → empty
-        guard volts < points[points.count - 1].v else { return 100 }   // ≥ 3.6 V → full
-        for i in 0..<(points.count - 1) {
-            let a = points[i], b = points[i + 1]
-            if volts >= a.v && volts <= b.v {
-                let t = (volts - a.v) / (b.v - a.v)
-                return Int((a.pct + t * (b.pct - a.pct)).rounded())
-            }
-        }
-        return 100
-    }
-
+    /// The scale reports percent directly (decompiled `voltagePercent`).
     public static func percent(rawByte: Int) -> Int {
-        percent(volts: volts(rawByte: rawByte))
+        min(max(rawByte & 0xFF, 0), 100)
     }
 
+    /// Decompiled DFU gate: the official updater refuses to flash at ≤ 10 %.
     public static func isLow(rawByte: Int) -> Bool {
-        volts(rawByte: rawByte) < 2.8
+        percent(rawByte: rawByte) <= 10
     }
 }

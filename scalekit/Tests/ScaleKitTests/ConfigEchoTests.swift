@@ -96,20 +96,17 @@ final class ConfigEchoTests: XCTestCase {
                        [0x10, 0x03, 0x03, 0x00, 0x00, 0x00, 0x00])
     }
 
-    // MARK: Battery (SRD-006 FR-3)
+    // MARK: Battery (SRD-006 FR-3) — raw byte IS the percent (issue #15)
 
     func testBatteryMapping() {
-        XCTAssertEqual(Battery.volts(rawByte: 100), 2.6, accuracy: 0.001)
         XCTAssertEqual(Battery.percent(rawByte: 0), 0)
-        XCTAssertEqual(Battery.percent(rawByte: 200), 100)
-        XCTAssertTrue(Battery.isLow(rawByte: 100))       // 2.6 V < 2.8
-        XCTAssertFalse(Battery.isLow(rawByte: 150))      // 3.1 V
-        // Monotonicity: more voltage never yields less percent.
-        var last = -1
-        for raw in 0...255 {
-            let pct = Battery.percent(rawByte: raw)
-            XCTAssertGreaterThanOrEqual(pct, last)
-            last = pct
-        }
+        XCTAssertEqual(Battery.percent(rawByte: 80), 80)
+        XCTAssertEqual(Battery.percent(rawByte: 100), 100)
+        XCTAssertEqual(Battery.percent(rawByte: 200), 100, "clamped to 100")
+        XCTAssertTrue(Battery.isLow(rawByte: 10), "DFU gate: ≤10 %% is low")
+        XCTAssertTrue(Battery.isLow(rawByte: 5))
+        XCTAssertFalse(Battery.isLow(rawByte: 60))
+        // Informational volts estimate retained.
+        XCTAssertEqual(Battery.volts(rawByte: 100), 2.6, accuracy: 0.001)
     }
 }

@@ -205,4 +205,24 @@ body-fat-formula pickers pushed via `0x1004`/`0x1006` with echo verification
 person's goal, clear-scale-memory (`0x1005`) with confirmation dialog, and per-record
 swipe actions.
 
-## 14. The measurment data should be only added to the app profile that refers to ios user.
+## 14. Only the iOS owner's profile should export to Apple Health — FIXED ✅
+
+The People manager now has a **"This is me"** designation (blue `ME` badge, one person
+max, persisted). The History heart button exports **only that person's records** and is
+disabled when nobody is designated or they have no records. CSV export stays unscoped.
+Combined with the #11 id-tagged dedup, re-taps never duplicate anything.
+
+## 15. Battery shows 0% while the scale still works — FIXED ✅ (interpretation bug)
+
+**Confirmed wrong — our conversion, not the scale.** Decompiled ground truth:
+`FatScaleWorker.readDeviceVoltage` → `DataParseUtils.parseWeightScaleVoltage(bArr)`
+returns `bArr[0]` and the official app **logs that value as `voltagePercent`** (the DFU
+flow aborts when it is ≤ 10). The `raw/100 + 1.6 V` formula lives in
+`ByteDataParser.toBatteryVoltage` and belongs to the **2-byte pedometer voltage fields**,
+not the scale's `A640` byte. Our piecewise V→% curve mapped a healthy ~3.1 V scale
+(raw ≈ 75–100) to 0 %.
+
+**Fix:** `Battery.percent(rawByte:)` now treats the byte as the percent directly
+(clamped 0–100); `isLow` = ≤ 10 % (the decompiled DFU gate). The volts formula is kept
+only as an informational estimate. On hardware the readout should now match the official
+app.

@@ -212,6 +212,9 @@ final class PersonStore: ObservableObject {
     @Published private(set) var people: [Person] = []
     /// The person currently on the scale — new weigh-ins auto-assign to them.
     @Published var activePersonId: UUID?
+    /// The person whose records may flow to Apple Health (issue #14) — the
+    /// profile that refers to the iOS device owner. `nil` = nobody.
+    @Published private(set) var myPersonId: UUID?
 
     private let fileURL: URL
 
@@ -226,6 +229,11 @@ final class PersonStore: ObservableObject {
             .flatMap { UUID(uuidString: $0) }
         if activePersonId != nil && person(id: activePersonId!) == nil {
             activePersonId = nil
+        }
+        myPersonId = UserDefaults.standard.string(forKey: "myPersonId")
+            .flatMap { UUID(uuidString: $0) }
+        if myPersonId != nil && person(id: myPersonId!) == nil {
+            myPersonId = nil
         }
     }
 
@@ -292,12 +300,31 @@ final class PersonStore: ObservableObject {
             activePersonId = nil
             UserDefaults.standard.removeObject(forKey: "activePersonId")
         }
+        if myPersonId == person.id {
+            myPersonId = nil
+            UserDefaults.standard.removeObject(forKey: "myPersonId")
+        }
     }
 
     /// Marks `person` as the active weigh-in target (arms their scale slot).
     func setActive(_ person: Person) {
         activePersonId = person.id
         UserDefaults.standard.set(person.id.uuidString, forKey: "activePersonId")
+    }
+
+    /// Designates which profile is the iOS device owner (issue #14) — only
+    /// their records are eligible for Apple Health export. Pass nil to clear.
+    func setMyProfile(_ person: Person?) {
+        myPersonId = person?.id
+        if let p = person {
+            UserDefaults.standard.set(p.id.uuidString, forKey: "myPersonId")
+        } else {
+            UserDefaults.standard.removeObject(forKey: "myPersonId")
+        }
+    }
+
+    var myPerson: Person? {
+        person(id: myPersonId)
     }
 
     private func mutate(_ id: UUID, _ change: (inout Person) -> Void) {

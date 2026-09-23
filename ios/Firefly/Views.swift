@@ -200,6 +200,14 @@ struct HistoryView: View {
         }
     }
 
+    /// Issue #14: Health export is restricted to the profile designated as the
+    /// iOS device owner ("This is me" in the People manager). Empty when no
+    /// one is designated or they have no records — the heart button disables.
+    private var myRecords: [MeasurementRecord] {
+        guard let myId = people.myPersonId else { return [] }
+        return records.filter { $0.personId == myId }
+    }
+
     private func displayName(for rec: MeasurementRecord) -> String {
         people.person(id: rec.personId)?.name ?? "Unassigned"
     }
@@ -258,10 +266,11 @@ struct HistoryView: View {
                         showExport = true
                     } label: { Image(systemName: "square.and.arrow.up") }
                     .disabled(visibleRecords.isEmpty)
+                    // Issue #14: only the iOS owner's profile exports to Health.
                     Button {
-                        healthMessage = HealthKitWriter.writeWeight(records: visibleRecords)
+                        healthMessage = HealthKitWriter.writeWeight(records: myRecords)
                     } label: { Image(systemName: "heart") }
-                    .disabled(visibleRecords.isEmpty)
+                    .disabled(myRecords.isEmpty)
                 }
             }
             .alert("CSV Export", isPresented: $showExport) {
@@ -611,12 +620,23 @@ struct DeviceView: View {
                             .background(Capsule().fill(.green.opacity(0.15)))
                             .foregroundStyle(.green)
                     }
+                    if people.myPersonId == p.id {
+                        Text("ME").font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(Capsule().fill(.blue.opacity(0.15)))
+                            .foregroundStyle(.blue)
+                    }
                 }
                 Text("slot \(p.slot) · \(p.sexMale ? "m" : "f") · \(p.age) y · " +
                      String(format: "%.0f cm", p.heightCm))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
+            if people.myPersonId != p.id {
+                Button("This is me") { people.setMyProfile(p) }
+                    .buttonStyle(.bordered)
+                    .font(.caption)
+            }
             if people.activePersonId != p.id {
                 Button("Set active") { people.setActive(p) }
                     .buttonStyle(.bordered)
@@ -632,6 +652,12 @@ struct DeviceView: View {
             Button {
                 editingPerson = p
             } label: { Label("Edit", systemImage: "pencil") }
+            if people.myPersonId == p.id {
+                Button {
+                    people.setMyProfile(nil)
+                } label: { Label("Unset me", systemImage: "person.slash") }
+                .tint(.gray)
+            }
         }
     }
 
