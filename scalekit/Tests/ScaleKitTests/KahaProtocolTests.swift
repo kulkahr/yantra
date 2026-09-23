@@ -232,4 +232,67 @@ final class KahaProtocolTests: XCTestCase {
         XCTAssertNil(KahaProtocol.parsePairingQR("https://example.com/nothing"))
         XCTAssertNil(KahaProtocol.parsePairingQR("btname="))
     }
+
+    // MARK: - Control & notification commands
+
+    func testMusicAndCameraAndFindWatchFrames() {
+        // SetMusicPlayBackStatusReq: {2, -127, 5, 0, play?1:2}
+        XCTAssertEqual(KahaProtocol.setMusicPlayback(playing: true),
+                       [0x02, 0x81, 0x05, 0x00, 0x01])
+        XCTAssertEqual(KahaProtocol.setMusicPlayback(playing: false),
+                       [0x02, 0x81, 0x05, 0x00, 0x02])
+        // SetMusicVolumePercentageReq: {0, -89, 5, 0, pct}
+        XCTAssertEqual(KahaProtocol.setMusicVolume(percent: 60),
+                       [0x00, 0xA7, 0x05, 0x00, 60])
+        // FindMyWatchReq: {2, -91, 6, 0, start?1:2, count}
+        XCTAssertEqual(KahaProtocol.findMyWatch(start: true, count: 3),
+                       [0x02, 0xA5, 0x06, 0x00, 0x01, 3])
+        // SetCameraStatusReq: {2, 18, 6, 0, 2, enter?1:2}
+        XCTAssertEqual(KahaProtocol.setCameraRemote(enter: true),
+                       [0x02, 0x12, 0x06, 0x00, 0x02, 0x01])
+    }
+
+    func testAlertSwitchesBitmask() {
+        // MessageAlertSwitchesReq: call=1 + sms=4 → byte0 0x05.
+        XCTAssertEqual(KahaProtocol.setAlertSwitches([.call, .sms]),
+                       [0x02, 0x82, 0x06, 0x00, 0x05, 0x00])
+        // Telegram (bit 6 of byte1) + call → 0x41 in byte1.
+        XCTAssertEqual(KahaProtocol.setAlertSwitches([.call, .telegram]),
+                       [0x02, 0x82, 0x06, 0x00, 0x01, 0x40])
+    }
+
+    func testSendMessageShortFrame() {
+        let frames = KahaProtocol.sendMessage("Hi", type: 3)  // SMS
+        XCTAssertEqual(frames.count, 1)
+        let f = KahaProtocol.parse(frames[0])!
+        XCTAssertEqual(f.classId, 0x02)
+        XCTAssertEqual(f.cmdId, 0x83)
+        // Payload layout: [lenLo, lenHi, type, msg…]
+        XCTAssertEqual(f.payload.dropFirst(2).first, 3)
+        XCTAssertEqual(String(bytes: f.payload.dropFirst(3), encoding: .utf8), "Hi")
+    }
+
+    func testSendMessageMultipacketSplits() {
+        let long = String(repeating: "x", count: 40)
+        let frames = KahaProtocol.sendMessage(long, type: 18)
+        XCTAssertEqual(frames.first?.first, 0x7F, "long messages start with the 0x7F header")
+        XCTAssertEqual(frames.count > 1, true)
+    }
+
+    func testWatchControlDecode() {
+        // Find-phone push: [01 05 04 00 01 01]
+        let fp = KahaProtocol.decodeWatchControl(
+            KahaProtocol.parse([0x01, 0x05, 0x06, 0x00, 0x01, 0x01])!)
+        XCTAssertEqual(fp, .findMyPhone)
+        // Camera capture: [01 05 06 00 03 01]
+        XCTAssertEqual(KahaProtocol.decodeWatchControl(
+            KahaProtocol.parse([0x01, 0x05, 0x06, 0x00, 0x03, 0x01])!), .cameraCapture)
+        // Music next: [01 00 05 00 03]
+        XCTAssertEqual(KahaProtocol.decodeWatchControl(
+            KahaProtocol.parse([0x01, 0x00, 0x05, 0x00, 0x03])!), .musicNext)
+        // Unrelated frame → nil.
+        XCTAssertNil(KahaProtocol.decodeWatchControl(
+            KahaProtocol.parse(KahaProtocol.frame(classId: 0x06, cmdId: 0x80,
+                                                  payload: [1, 2, 3, 4, 5]))!))
+    }
 }

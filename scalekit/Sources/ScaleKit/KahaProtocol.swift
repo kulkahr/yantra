@@ -45,6 +45,8 @@ public enum KahaProtocol {
         public static let getDeviceTime: UInt8 = 0x06
         public static let getBatteryLevel: UInt8 = 0x08
         public static let set24HourFormat: UInt8 = 0x79
+        public static let setDistanceUnit: UInt8 = 0xA2    // payload 0 km / 1 mile
+        public static let setMusicVolume: UInt8 = 0xA7     // payload percent byte
         public static let setDeviceTime: UInt8 = 0x81   // 0x80|1
     }
 
@@ -59,6 +61,35 @@ public enum KahaProtocol {
     public enum LiveCmd {
         public static let liveHealth: UInt8 = 0x80      // hr, dbp, sbp, rr, stress
         public static let liveSteps: UInt8 = 0x81       // steps u32 LE [+ distance f32 + calories f32]
+    }
+
+    public enum AlertCmd {
+        public static let setMusicStatus: UInt8 = 0x81  // payload 1 play / 2 pause (app → watch playback state)
+        public static let setMessageAlertSwitches: UInt8 = 0x82 // 2-byte app bitmask (call=1, calendar=2, sms=4 …)
+        public static let sendMessageContent: UInt8 = 0x83 // [type, lenLo, lenHi, utf8…] (type: 1 call, 3 sms, 5 whatsapp, 18 other)
+    }
+
+    public enum SystemCmd {
+        public static let findMyWatch: UInt8 = 0xA5     // payload [1 start / 2 stop, count]
+        public static let setCameraStatus: UInt8 = 0x12 // payload [2, 1 enter / 2 exit] (class 0x02)
+        public static let watchFaceList: UInt8 = 0x0D   // get installed watch-face ids
+        public static let watchFaceCurrent: UInt8 = 0x0F // get current watch-face id
+        public static let watchFaceSet: UInt8 = 0x8F    // payload [idLo, idHi] (0x02 0x8F 6 0 id id<<8)
+    }
+
+    /// Watch → app control pushes (class 0x01, cmd 0x05; ProtocolParser dispatch).
+    public enum WatchControlEvent: UInt8 {
+        case findMyPhone = 1
+        case cameraEnter = 2
+        case cameraCapture = 3
+        case callReject = 4
+        case callMute = 5
+        case musicPlay = 21      // bArr[4] of cmd 0x05 when bArr[1] == 0x00
+        case musicPause = 22
+        case musicNext = 23
+        case musicPrevious = 24
+        case volumeUp = 25
+        case volumeDown = 26
     }
 
     // MARK: - Frame building
@@ -400,12 +431,189 @@ public enum KahaProtocol {
         return String(rest[..<end])
     }
 
+    // MARK: - Control & notification commands (BleUUID constants + request classes)
+
+    /// Music playback state push `02 81`: 1 = play, 2 = pause
+    /// (`SetMusicPlayBackStatusReq`).
+    public static func setMusicPlayback(playing: Bool) -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: AlertCmd.setMusicStatus, payload: [playing ? 1 : 2])
+    }
+
+    /// Music volume `00 A7`: percent byte (`SetMusicVolumePercentageReq`).
+    public static func setMusicVolume(percent: Int) -> [UInt8] {
+        frame(classId: ClassId.info, cmdId: InfoCmd.setMusicVolume,
+              payload: [UInt8(max(0, min(100, percent)))])
+    }
+
+    /// Find-my-watch `02 A5`: `[1 start / 2 stop, count]` (`FindMyWatchReq`).
+    public static func findMyWatch(start: Bool, count: Int = 3) -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: SystemCmd.findMyWatch,
+              payload: [start ? 1 : 2, UInt8(count)])
+    }
+
+    /// Camera remote `02 12`: `[2, 1 enter / 2 exit]` (`SetCameraStatusReq`).
+    /// The watch then pushes `01 05 [3]` (capture) when the shutter is tapped.
+    public static func setCameraRemote(enter: Bool) -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: SystemCmd.setCameraStatus,
+              payload: [2, enter ? 1 : 2])
+    }
+
+    /// Notification-alert app bitmask `02 82` (`MessageAlertSwitchesReq`):
+    /// byte0 = call 1 · calendar 2 · sms 4 · email 8 · whatsapp 16 · wechat 32 ·
+    /// facebook 64 · instagram 128; byte1 = twitter 1 · messenger 2 · qq 4 ·
+    /// qzone 8 · snapchat 16 · skype 32 · telegram 64 · linkedin 128.
+    public struct AlertApps: OptionSet, Sendable {
+        public let rawValue: UInt16
+        public init(rawValue: UInt16) { self.rawValue = rawValue }
+        public static let call = Self(rawValue: 1 << 0)
+        public static let calendar = Self(rawValue: 1 << 1)
+        public static let sms = Self(rawValue: 1 << 2)
+        public static let email = Self(rawValue: 1 << 3)
+        public static let whatsapp = Self(rawValue: 1 << 4)
+        public static let wechat = Self(rawValue: 1 << 5)
+        public static let facebook = Self(rawValue: 1 << 6)
+        public static let instagram = Self(rawValue: 1 << 7)
+        public static let twitter = Self(rawValue: 1 << 8)
+        public static let messenger = Self(rawValue: 1 << 9)
+        public static let snapchat = Self(rawValue: 1 << 12)
+        public static let skype = Self(rawValue: 1 << 13)
+        public static let telegram = Self(rawValue: 1 << 14)
+        public static let linkedin = Self(rawValue: 1 << 15)
+    }
+
+    public static func setAlertSwitches(_ apps: AlertApps) -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: AlertCmd.setMessageAlertSwitches,
+              payload: [UInt8(apps.rawValue & 0xFF), UInt8((apps.rawValue >> 8) & 0xFF)])
+    }
+
+    /// Message-content push `02 83`: payload `[lenLo, lenHi, type, utf8…]`
+    /// (`MessageContentReq` short path ≤ 15 chars: `SEND_MESSAGE_CONTENT` +
+    /// `{len+3, 0, type}` + bytes). Type ids from the `AppNotificationType`
+    /// mapping: 1 call, 2 calendar, 3 sms, 4 email, 5 whatsapp, 8 instagram,
+    /// 18 other-apps.
+    public static func sendMessage(_ text: String, type: UInt8) -> [[UInt8]] {
+        let content = Array(text.utf8)
+        // ≤15 chars → single frame; longer → multipacket header + 16-byte chunks.
+        guard content.count > 15 else {
+            return [frame(classId: ClassId.alerts, cmdId: AlertCmd.sendMessageContent,
+                          payload: frameLength(total: 4 + 3 + content.count)
+                            + [type] + content)]
+        }
+        // Truncated to 58 chars, header 0x7F + packet count (MessageContentReq).
+        let clipped = Array(content.prefix(58))
+        let packetCount = Int(ceil(Double(clipped.count + 24) / 16.0))
+        var frames: [[UInt8]] = []
+        // First packet: 0x7F + meta + inner frame header (02 83 …) + first 3 bytes.
+        let inner = [ClassId.alerts, AlertCmd.sendMessageContent, type]
+        var first: [UInt8] = [ClassId.multipacket, 0x00, 0x00, 0x00,
+                              UInt8(packetCount), 0x00]
+        first.append(contentsOf: [0x00, 0x00, 0x02, AlertCmd.sendMessageContent])
+        first.append(UInt8(inner.count))
+        first.append(0x00)
+        first.append(contentsOf: Array(clipped.prefix(3)))
+        frames.append(first)
+        var offset = 3
+        var seq: UInt8 = 1
+        while offset < clipped.count {
+            let chunk = Array(clipped[offset..<min(offset + 16, clipped.count)])
+            frames.append([ClassId.multipacket, 0x00, 0x00, 0x00, seq] + chunk)
+            seq += 1
+            offset += 16
+        }
+        // Patch total length bytes (0x7F header frames carry total len LE).
+        let total = 4 + 3 + clipped.count
+        frames[0][1] = UInt8(total & 0xFF)
+        frames[0][2] = UInt8((total >> 8) & 0xFF)
+        return frames
+    }
+
+    /// Call-alert `02 82` uses the same bitmask; calls surface via the message
+    /// content frame with type 1 (caller name) — no separate command needed.
+
+    /// Watch-side control push decoder (`01 05` / `01 00`):
+    /// - `[01, 05, …, kind, arg?]` → find-phone(1)/camera(2,3)/call(4,5)
+    /// - `[01, 00, …, kind]` → music(21–24)/volume(25,26)
+    public static func decodeWatchControl(_ frame: Frame) -> WatchControlEvent? {
+        guard frame.classId == ClassId.fitness, frame.payload.count >= 1 else { return nil }
+        switch frame.cmdId {
+        case 0x05:
+            guard frame.payload.count >= 2 else { return nil }
+            switch frame.payload[0] {
+            case 1: return .findMyPhone            // arg = payload[1] on/off
+            case 2: return frame.payload[1] == 1 ? .cameraEnter : nil
+            case 3: return .cameraCapture
+            case 4: return .callReject
+            case 5: return .callMute
+            default: return nil
+            }
+        case 0x00:
+            switch frame.payload[0] {
+            case 1: return .musicPlay
+            case 2: return .musicPause
+            case 3: return .musicNext
+            case 4: return .musicPrevious
+            case 5: return .volumeUp
+            case 6: return .volumeDown
+            default: return nil
+            }
+        default:
+            return nil
+        }
+    }
+
+    /// Watch-face list request `02 0D` (`GetWatchFaceListReq`).
+    public static func requestWatchFaceList() -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: SystemCmd.watchFaceList)
+    }
+
+    /// Current watch-face request `02 0F` (`GetCurrentWatchFaceReq`).
+    public static func requestCurrentWatchFace() -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: SystemCmd.watchFaceCurrent)
+    }
+
+    /// Switch watch face `02 8F`: `[idLo, idHi]` (`SetCurrentWatchFaceReq`).
+    public static func setWatchFace(id: Int) -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: SystemCmd.watchFaceSet,
+              payload: [UInt8(id & 0xFF), UInt8((id >> 8) & 0xFF)])
+    }
+
+    /// Watch-face list response: LE uint16 ids at every other byte
+    /// (`GetWatchFaceListRes` reads pairs starting at payload[1]).
+    public static func decodeWatchFaceList(_ payload: [UInt8]) -> [Int] {
+        guard payload.count >= 2 else { return [] }
+        var out: [Int] = []
+        var i = 1
+        while i + 1 < payload.count {
+            out.append(Int(payload[i]) | (Int(payload[i + 1]) << 8))
+            i += 2
+        }
+        return out
+    }
+
+    /// Current watch-face response (`GetCurrentWatchFaceRes`: bArr[4..5] LE).
+    public static func decodeCurrentWatchFace(_ payload: [UInt8]) -> Int? {
+        guard payload.count >= 2 else { return nil }
+        return Int(payload[0]) | (Int(payload[1]) << 8)
+    }
+
+    /// Workout summary request `01 23`: days-ago byte (`GetActivitySummaryReq`).
+    public static func requestWorkoutSummary(daysAgo: Int) -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: 0x23, payload: [UInt8(daysAgo)])
+    }
+
     // MARK: - Helpers
 
-    static func leFloat(_ bytes: [UInt8], _ offset: Int) -> Float {
+    /// Little-endian float32 at `offset` (live-steps distance/calories,
+    /// workout summaries). Exposed for app-layer payload decoders.
+    public static func leFloat(_ bytes: [UInt8], _ offset: Int) -> Float {
         guard offset + 4 <= bytes.count else { return 0 }
         var v: UInt32 = 0
         for i in (0..<4).reversed() { v = (v << 8) | UInt32(bytes[offset + i]) }
         return Float(bitPattern: v)
+    }
+
+    /// Total-frame-length bytes (lo, hi) shared by hand-built frames.
+    static func frameLength(total: Int) -> [UInt8] {
+        [UInt8(total & 0xFF), UInt8((total >> 8) & 0xFF)]
     }
 }
