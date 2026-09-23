@@ -55,8 +55,11 @@ public enum BodyComposer {
     }
 
     /// Compose from raw inputs. `impedanceOhm == nil` → BMI-fallback fat%.
+    /// `calibration` applies corrections fitted against official-app readings
+    /// (SRD-006 FR-6) — see `BodyCalibration`.
     public static func compose(weightKg: Double, impedanceOhm: Double?,
-                               profile: Profile) -> Composition {
+                               profile: Profile,
+                               calibration: BodyCalibration = .standard) -> Composition {
         let h = max(0.5, profile.heightMeters)
         let h2 = h * h
         let age = max(1, profile.age)
@@ -65,46 +68,71 @@ public enum BodyComposer {
 
         var impedanceBased = true
         var fatFree: Double
+        var fatPercentRaw: Double?
         if let r = impedanceOhm, r > 0 {
-            let hCm2 = pow(h * 100, 2)
-            let (a, b, c): (Double, Double, Double) = profile.sexMale ? (0.35, 0.50, 3.0) : (0.30, 0.45, 4.0)
-            fatFree = a * hCm2 / r + b * weightKg + c
+            if let fit = calibration.fatFit {
+                // Fitted impedance model (official-app parity path).
+                fatPercentRaw = fit.evaluate(heightCm: h * 100, impedanceOhm: r,
+                                             weightKg: weightKg, ageYears: Double(age))
+                fatFree = weightKg * (1 - clamp(fatPercentRaw!, 2...60) / 100)
+            } else {
+                let hCm2 = pow(h * 100, 2)
+                let (a, b, c): (Double, Double, Double) = profile.sexMale ? (0.35, 0.50, 3.0) : (0.30, 0.45, 4.0)
+                fatFree = a * hCm2 / r + b * weightKg + c
+            }
         } else {
             impedanceBased = false
             let sexTerm = profile.sexMale ? 10.8 : 0.0
             let fat = 1.20 * bmi + 0.23 * Double(age) - sexTerm - 5.4
+                + calibration.fallbackFatOffset
             fatFree = weightKg * (1 - clamp(fat, 2...60) / 100)
         }
         fatFree = clamp(fatFree, 0...weightKg)
 
-        let fatMass = weightKg - fatFree
-        let fatPercent = weightKg > 0 ? clamp(fatMass / weightKg * 100, 2...60) : 0
-        let waterPercent = clamp(0.73 * fatFree / max(weightKg, 0.01) * 100, 20...75)
-        let bone = 0.055 * fatFree
-        let muscle = (profile.sexMale ? 0.50 : 0.45) * fatFree
-        let softLean = fatFree - bone
-        let protein = 0.16 * fatFree
-
-        let bmr = profile.sexMale
+        // Base (uncorrected) metric values — affine corrections apply to these.
+        var fatMass = weightKg - fatFree
+        let fatPercent = fatPercentRaw.map {
+            clamp($0, 2...60)
+        } ?? (weightKg > 0 ? clamp(fatMass / weightKg * 100, 2...60) : 0)
+        var waterPercent = clamp(0.73 * fatFree / max(weightKg, 0.01) * 100, 20...75)
+        var bone = 0.055 * fatFree
+        var muscle = (profile.sexMale ? 0.50 : 0.45) * fatFree
+        var musclePercent = weightKg > 0 ? clamp(muscle / weightKg * 100, 0...60) : 0
+        var softLean = fatFree - bone
+        var protein = 0.16 * fatFree
+        var bmr = profile.sexMale
             ? 10 * weightKg + 6.25 * (h * 100) - 5 * Double(age) + 5
             : 10 * weightKg + 6.25 * (h * 100) - 5 * Double(age) - 161
+        var vfl = fatMass * 0.1 + Double(age) / 100 + (profile.sexMale ? 0.5 : 0)
 
-        // Visceral-fat placeholder: fat-mass scaled with age/sex bump (tune vs app).
-        let vfl = fatMass * 0.1 + Double(age) / 100 + (profile.sexMale ? 0.5 : 0)
+        // Fitted affine corrections (official-app parity), each applied to the
+        // BASE value — mirrors BodyCalibration.fit semantics.
+        func corrected(_ metric: CalibrationMetric, _ v: Double) -> Double {
+            calibration.corrections[metric.rawValue]?.apply(v) ?? v
+        }
+        fatMass = corrected(.fatMassKg, fatMass)
+        waterPercent = corrected(.waterPercent, waterPercent)
+        bone = corrected(.boneKg, bone)
+        muscle = corrected(.muscleKg, muscle)
+        musclePercent = corrected(.musclePercent, musclePercent)
+        softLean = corrected(.softLeanKg, softLean)
+        protein = corrected(.proteinKg, protein)
+        bmr = corrected(.basalMetabolismKcal, bmr)
+        vfl = corrected(.visceralFatLevel, vfl)
 
         return Composition(
             bmi: bmi,
             fatPercent: fatPercent,
-            fatMassKg: fatMass,
-            waterPercent: waterPercent,
-            muscleKg: muscle,
-            musclePercent: weightKg > 0 ? muscle / weightKg * 100 : 0,
+            fatMassKg: max(fatMass, 0),
+            waterPercent: clamp(waterPercent, 20...75),
+            muscleKg: max(muscle, 0),
+            musclePercent: clamp(musclePercent, 0...60),
             fatFreeKg: fatFree,
             softLeanKg: max(softLean, 0),
-            boneKg: bone,
-            proteinKg: protein,
+            boneKg: max(bone, 0),
+            proteinKg: max(protein, 0),
             basalMetabolismKcal: Int(bmr.rounded()),
-            visceralFatLevel: (vfl * 10).rounded() / 10,
+            visceralFatLevel: (max(vfl, 0) * 10).rounded() / 10,
             impedanceBased: impedanceBased)
     }
 

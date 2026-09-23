@@ -51,7 +51,8 @@ struct MeasureView: View {
 
     /// Issue #7 — body composition for the latest weigh-in (issue #8: the scale
     /// sends only weight+impedance; composition is computed app-side, like the
-    /// official app). Uses the weighing person's profile when set.
+    /// official app). Uses the weighing person's profile when set, and the
+    /// fitted calibration when the user has captured official-app readings.
     private var compositionCard: some View {
         let rec = central.lastRecord!
         let profile: BodyComposer.Profile = {
@@ -61,9 +62,11 @@ struct MeasureView: View {
             }
             return ProfileStore.shared.composerProfile
         }()
+        let calStore = CalibrationStore.shared
         let c = BodyComposer.compose(weightKg: rec.weightKg,
                                      impedanceOhm: rec.impedanceOhm.map(Double.init),
-                                     profile: profile)
+                                     profile: profile,
+                                     calibration: calStore.calibration ?? .standard)
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -87,6 +90,15 @@ struct MeasureView: View {
                 Label("No impedance — fat % is a BMI-based estimate",
                       systemImage: "info.circle")
                     .font(.caption2).foregroundStyle(.secondary)
+            }
+            if calStore.calibration != nil {
+                Label("Calibrated to official app", systemImage: "checkmark.seal")
+                    .font(.caption2).foregroundStyle(.green)
+            } else {
+                NavigationLink("Match the official app readings →") {
+                    CalibrationView(central: central, lastRecord: rec)
+                }
+                .font(.caption2)
             }
         }
         .padding(14)
@@ -693,6 +705,146 @@ private struct PersonEditorView: View {
                 }
             }
         }
+    }
+}
+
+/// Capture paired samples (our raw weigh-in + what the official app showed)
+/// and refit the composition model — SRD-006 FR-6 (±0.1 % fat vs official).
+struct CalibrationView: View {
+    @ObservedObject var central: ScaleCentral
+    let lastRecord: MeasurementRecord?
+
+    @ObservedObject private var store = CalibrationStore.shared
+    @State private var weightKg = ""
+    @State private var impedance = ""
+    @State private var sexMale = true
+    @State private var age = 30
+    @State private var heightCm = 175.0
+    @State private var fatPercent = ""
+    @State private var bmrKcal = ""
+    @State private var visceral = ""
+    @State private var musclePercent = ""
+    @State private var status = ""
+
+    var body: some View {
+        Form {
+            Section("Why") {
+                Text("The scale sends only weight + impedance; the official app computes " +
+                     "the rest in its cloud. Weigh in, note the official app's values, " +
+                     "enter them here — after ≥ 4 samples Firefly refits its formulas " +
+                     "to match (same person + profile each time).")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("Weigh-in (raw)") {
+                if let rec = lastRecord {
+                    Button("Use last weigh-in (\(String(format: "%.2f", rec.weightKg)) kg" +
+                           (rec.impedanceOhm.map { ", \($0) Ω" } ?? "")) {
+                        weightKg = String(format: "%.2f", rec.weightKg)
+                        impedance = rec.impedanceOhm.map(String.init) ?? ""
+                        if let p = PersonStore.shared.person(id: rec.personId) {
+                            sexMale = p.sexMale
+                            age = p.age
+                            heightCm = p.heightCm
+                        }
+                    }
+                }
+                HStack {
+                    Text("Weight (kg)")
+                    Spacer()
+                    TextField("70.75", text: $weightKg).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Text("Impedance (Ω)")
+                    Spacer()
+                    TextField("585", text: $impedance).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                }
+                Picker("Sex", selection: $sexMale) {
+                    Text("Male").tag(true)
+                    Text("Female").tag(false)
+                }.pickerStyle(.segmented)
+                Stepper("Age: \(age)", value: $age, in: 5...120)
+                HStack {
+                    Text("Height")
+                    Slider(value: $heightCm, in: 100...220, step: 1)
+                    Text(String(format: "%.0f", heightCm)).monospacedDigit()
+                }
+            }
+            Section("Official app showed") {
+                HStack {
+                    Text("Body fat (%)")
+                    Spacer()
+                    TextField("20.5", text: $fatPercent).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Text("Muscle (%)")
+                    Spacer()
+                    TextField("optional", text: $musclePercent).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Text("BMR (kcal)")
+                    Spacer()
+                    TextField("optional", text: $bmrKcal).keyboardType(.numberPad).multilineTextAlignment(.trailing)
+                }
+                HStack {
+                    Text("Visceral level")
+                    Spacer()
+                    TextField("optional", text: $visceral).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                Button("Add sample") { addSample() }
+                    .disabled(!inputValid)
+            }
+            if !status.isEmpty {
+                Section { Text(status).font(.footnote) }
+            }
+            Section("Samples (\(store.samples.count))") {
+                ForEach(store.samples) { stored in
+                    let s = stored.sample
+                    HStack {
+                        Text(String(format: "%.2f kg · %@", s.weightKg,
+                                    s.impedanceOhm.map { "\($0) Ω" } ?? "no z"))
+                        Spacer()
+                        Text(s.officialFatPercent.map { String(format: "%.1f%% fat", $0) } ?? "—")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .onDelete { offsets in
+                    for i in offsets { store.remove(store.samples[i]) }
+                }
+            }
+            Section {
+                Button("Refit calibration") { status = store.refit() }
+                    .disabled(store.samples.count < 4)
+                if let report = store.lastReport {
+                    Text(report).font(.footnote).foregroundStyle(.secondary)
+                }
+                if store.calibration != nil {
+                    Button("Remove calibration (use default formulas)", role: .destructive) {
+                        store.resetFit()
+                        status = "Calibration removed."
+                    }
+                }
+            }
+        }
+        .navigationTitle("Calibration")
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private var inputValid: Bool {
+        Double(weightKg) != nil && Double(fatPercent) != nil
+    }
+
+    private func addSample() {
+        guard let w = Double(weightKg) else { return }
+        var s = CompositionSample(weightKg: w,
+                                  impedanceOhm: Double(impedance),
+                                  sexMale: sexMale, age: age, heightCm: heightCm)
+        s.officialFatPercent = Double(fatPercent)
+        s.officialMusclePercent = Double(musclePercent)
+        s.officialBMRKcal = Double(bmrKcal)
+        s.officialVisceralLevel = Double(visceral)
+        store.add(s)
+        fatPercent = ""; musclePercent = ""; bmrKcal = ""; visceral = ""
+        status = "Sample added — \(store.samples.count) total."
     }
 }
 

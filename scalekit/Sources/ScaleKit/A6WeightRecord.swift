@@ -19,6 +19,12 @@ public struct A6WeightRecord: Equatable {
     public var softLeanRaw: Int?            // flag bit 12
     public var waterRatioRaw: Int?          // flag bit 13
     public var impedanceOhm: Int?           // flag bit 14
+    /// True when this record came from the scale's stored-memory drain rather
+    /// than a live weigh-in: `remainCount > 0` means "more stored records
+    /// follow", i.e. the scale is emptying memory recorded while disconnected
+    /// (possibly by a different person) — issue #9. Set by
+    /// `SessionStateMachine` on arrival, not parsed from the wire.
+    public var fromMemoryDrain: Bool = false
 }
 
 public enum A6WeightRecordParser {
@@ -28,6 +34,7 @@ public enum A6WeightRecordParser {
         // decompiled layout starts at offset 2 (skips nothing else — command header IS bytes 0–1)
         guard payload.count >= 10 else { return nil }
         let remain = A6Bytes.toShort(payload, at: 2)
+
         let flags = A6Bytes.toInt(payload, at: 4)
         let weight = Double(A6Bytes.toShort(payload, at: 8)) * 0.01
 

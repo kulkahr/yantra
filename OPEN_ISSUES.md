@@ -130,3 +130,45 @@ XOR-variant selection matches the bind-time value.
 
 **Verification for #3–#8:** ScaleKit `swift test` 40/40 green; Firefly `xcodebuild build`
 + `-only-testing:FireflyTests test` — 8/8 tests green, zero warnings.
+
+## 9. Offline weigh-ins (e.g. dad's) get assigned to whoever is active — FIXED ✅
+
+Your dad's weigh-in was stored in the **scale's memory**; when you started a session the
+scale drained both records and the timestamp window alone mis-attributed his to you.
+
+**Fix (two signals, protocol first):**
+
+- `SessionStateMachine` now marks every `0x4802` record with `remainCount > 0` as
+  `fromMemoryDrain` — the scale reports "more stored records follow" only when emptying
+  memory, which is exactly the weighed-while-disconnected case. `ScaleCentral` leaves
+  those records **unassigned** (History asks who they belong to) and logs `· drained`.
+- The 10-minute freshness window stays as a secondary guard (catches a live record from
+  the previous person minutes before your session started).
+
+Retest of your exact scenario: dad weighs offline → start session → weigh → his record
+lands unassigned (orange banner in History), yours is auto-assigned to you.
+
+## 10. Firmware still shows 1.5.0.0 — FIXED ✅
+
+The #8 fix made the live `2A26` read work, but the **bind record on disk was created
+before that fix** and keeps the stale default forever (`DeviceView` displays the bind
+record; every session reused it too).
+
+**Fix:** whenever a session/pair handshake reads a real firmware string that differs from
+the stored one, `ScaleCentral` refreshes `BindStore` and logs `fw refreshed from device:`.
+One connect on the real scale repairs the record; the pair log will show
+`pair machine started (fw 1.4.0.42)`.
+
+---
+
+## Also: tuning composition to the official app (SRD-006 FR-6)
+
+The decompiled APK settles *where* the official values come from:
+`toWeightData()` uploads only weight + impedance to `weight_service/weight/syncToServer`
+and the UI reads back cloud-composed metrics (`activeMeasurement/getNewUploadWeight`,
+`getWeightListForWeek`) — **no formulas exist in the app** to copy. FR-6 is therefore met
+empirically: new **Calibration** screen (Measure → composition card → "Match the official
+app readings") captures paired samples (raw weigh-in + official fat %/muscle %/BMR/visceral),
+then a least-squares refit (`BodyCalibration.fit`) replaces the fat% impedance model and
+affine-corrects the other metrics. Fit report shows the max fat % residual; ≥ 4 samples
+(one person, consistent profile) required.

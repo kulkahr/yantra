@@ -45,7 +45,7 @@ Official app displays: weight, BMI, body-fat ratio, basal metabolism, muscle mas
 | FR-3 | App SHALL read `A640` on connect and at measurement end; show battery % with low-battery warning. |
 | FR-4 | App SHALL compute body-composition only when impedance is present; otherwise show weight-only and say why. |
 | FR-5 | App SHALL show raw (weight, impedance) and computed values distinctly; export both. |
-| FR-6 | Computed values SHALL match official realme Link within display tolerance (±0.1 % body-fat, ±1 kcal BMR) using the default formula set — validated during bring-up against the same user profile. |
+| FR-6 | Computed values SHALL match official realme Link within display tolerance (±0.1 % body-fat, ±1 kcal BMR). **Derivation (verified in the decompiled APK):** the official app uploads only weight + impedance to `weight_service/weight/syncToServer` and displays cloud-composed values — no local formulas exist to port. FR-6 is therefore met via `BodyCalibration`: a capture screen stores paired samples (raw weigh-in + official-app values), a least-squares refit replaces the fat % impedance model (`fat% = c0 + c1·h²/R + c2·W + c3·age`, zero-variance columns dropped) and affine-corrects other metrics; ≥ 4 samples, same person + profile. |
 
 ## 5. Acceptance criteria
 

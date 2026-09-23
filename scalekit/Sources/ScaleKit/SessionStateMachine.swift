@@ -286,8 +286,13 @@ public struct SessionStateMachine {
 
             case A6Command.weightData.rawValue:
                 if let record = A6WeightRecordParser.parse(payload) {
-                    out.measurements.append(record)
-                    lastRecord = record
+                    // remainCount > 0 ⇒ stored-memory drain (weighed offline,
+                    // possibly by someone else); a live weigh-in reports 0 —
+                    // hosts use this for attribution (issue #9).
+                    var rec = record
+                    rec.fromMemoryDrain = record.remainCount > 0
+                    out.measurements.append(rec)
+                    lastRecord = rec
                     remainingOnScale = record.remainCount
                     if record.remainCount > 0 {
                         phase = .draining

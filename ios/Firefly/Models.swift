@@ -318,6 +318,107 @@ final class PersonStore: ObservableObject {
     }
 }
 
+/// A captured calibration sample with a stable identity for listing/deleting.
+struct StoredCompositionSample: Codable, Identifiable, Equatable {
+    var id: UUID = UUID()
+    var sample: CompositionSample
+
+    static func == (lhs: StoredCompositionSample, rhs: StoredCompositionSample) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
+/// Store for body-composition calibration (SRD-006 FR-6): paired samples of
+/// our raw weigh-in inputs + the values the official app displayed, plus the
+/// fitted `BodyCalibration` derived from them.
+final class CalibrationStore: ObservableObject {
+    static let shared = CalibrationStore()
+
+    @Published private(set) var samples: [StoredCompositionSample] = []
+    @Published private(set) var calibration: BodyCalibration?
+    /// Human-readable result of the last refit (shown in the UI).
+    @Published private(set) var lastReport: String?
+
+    private let dir: URL
+
+    init(directory: URL? = nil) {
+        let base = directory ?? FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Firefly", isDirectory: true)
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        self.dir = base
+        samples = Self.loadSamples(url: base.appendingPathComponent("calibration-samples.json"))
+        calibration = Self.loadCalibration(url: base.appendingPathComponent("calibration-fit.json"))
+    }
+
+    func add(_ sample: CompositionSample) {
+        samples.append(StoredCompositionSample(sample: sample))
+        persistSamples()
+    }
+
+    func remove(_ stored: StoredCompositionSample) {
+        samples.removeAll { $0.id == stored.id }
+        persistSamples()
+    }
+
+    /// Refits the calibration from captured samples. Returns a summary string
+    /// (or why no fit was possible); stores the calibration on success.
+    @discardableResult
+    func refit() -> String {
+        let fitted = BodyCalibration.fit(samples: samples.map(\.sample))
+        guard let (cal, report) = fitted else {
+            lastReport = "Not enough data — weigh in ≥ 4 times and enter the " +
+                "official app's fat % for each (same person + profile)."
+            calibration = nil
+            persistCalibration()
+            return lastReport!
+        }
+        calibration = cal
+        lastReport = "Fitted: " + report.summary
+        persistCalibration()
+        return lastReport!
+    }
+
+    func resetFit() {
+        calibration = nil
+        lastReport = nil
+        persistCalibration()
+    }
+
+    // MARK: Persistence
+
+    private func persistSamples() {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(samples) {
+            try? data.write(to: dir.appendingPathComponent("calibration-samples.json"), options: .atomic)
+        }
+    }
+
+    private func persistCalibration() {
+        let url = dir.appendingPathComponent("calibration-fit.json")
+        guard let calibration else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        if let data = try? JSONEncoder().encode(calibration) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private static func loadSamples(url: URL) -> [StoredCompositionSample] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode([StoredCompositionSample].self, from: data)) ?? []
+    }
+
+    private static func loadCalibration(url: URL) -> BodyCalibration? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(BodyCalibration.self, from: data)
+    }
+}
+
 /// Persisted bind result (device identity) — the app-side BindStore.
 final class BindStore {
     struct Record: Codable {

@@ -216,6 +216,15 @@ final class ScaleCentral: NSObject, ObservableObject {
             .flatMap { String(data: $0, encoding: .utf8) }?
             .trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n\0")) ?? ""
         let effectiveFw = fw.isEmpty ? "1.5.0.0" : fw   // XOR-variant default
+        // Issue #10: bind records created before the #8 read fix persist the
+        // stale 1.5.0.0 default forever (DeviceView shows the bind record).
+        // The live 2A26 read is authoritative — refresh the stored value when
+        // it differs so the UI and future sessions agree with the hardware.
+        if var bind = BindStore.shared.record, !fw.isEmpty, bind.firmwareVersion != fw {
+            bind.firmwareVersion = fw
+            BindStore.shared.record = bind
+            appendLog("fw refreshed from device: \(fw)")
+        }
         let mac = connectTarget?.mac
             ?? BindStore.shared.record?.mac
             ?? ""
@@ -381,20 +390,24 @@ final class ScaleCentral: NSObject, ObservableObject {
         let activePersonId = PersonStore.shared.activePersonId
         let now = Date()
         for rec in out.measurements {
-            // Fresh weigh-in (≤10 min old) → active person; anything older is
-            // a drained memory record → unassigned, user chooses in History.
             var stored = MeasurementRecord(deviceId: deviceId, slot: slot,
                                            personId: activePersonId,
                                            from: rec)
-            let fresh = now.timeIntervalSince(stored.utc) <= 600
-                && stored.utc <= now.addingTimeInterval(60)
-            if !fresh { stored.personId = nil }
+            // Issue #9: attribution only for weigh-ins measured NOW. The
+            // protocol signal is primary — `remainCount > 0` means the scale is
+            // emptying stored memory (weighed while disconnected, possibly by
+            // someone else). Timestamp (≤10 min, ≤60 s in the future) is the
+            // secondary guard against a live record from a pre-session person.
+            let drained = rec.fromMemoryDrain
+                || now.timeIntervalSince(stored.utc) > 600
+                || stored.utc > now.addingTimeInterval(60)
+            if drained { stored.personId = nil }
             if MeasurementStore.shared.insert(stored) {
                 recordCount += 1
                 lastRecord = stored
                 appendLog(String(format: "✔ %.2f kg%@ (impedance %@)",
                                  rec.weightKg,
-                                 fresh ? "" : " · drained",
+                                 drained ? " · drained" : "",
                                  rec.impedanceOhm.map(String.init) ?? "-"))
             }
         }
