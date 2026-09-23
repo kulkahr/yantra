@@ -484,3 +484,28 @@ with "watch out of range — rescan" whenever the row wasn't in the system cache
 (fresh discovery after reboot, iOS cache eviction). Now: cache miss triggers an
 automatic rescan that auto-pairs the first matching advertisement (name-filter
 match, same path as QR pairing) instead of erroring out.
+
+## 38. Scanning the QR does not pair the watch. — FIXED ✅
+
+Two compounding causes:
+
+1. **Scan filter too narrow** — scans filtered on the Nordic-UART *service UUID*
+   in advertisements, but the Realtek/KaHa Storm Call 3 does not advertise that
+   service (the official app scans by device name with no filter, per the
+   decompiled scan flow). All four scan sites now scan unfiltered and match by
+   name (STORMCALL prefix / decoded QR filter).
+2. **Paired watch never recorded** — the QR/auto-pair path connected without
+   upserting into `DeviceStore`, so even a successful pairing left the hub empty
+   and a restart dropped the watch. Pair paths now call `registerInInventory`
+   (idempotent `DeviceStore.upsert`). The name matcher also gained a shared
+   STORMCALL-family branch so a stored generic name ("Storm Call 3") matches the
+   advertised `stormcall_3_0610` on retry.
+
+## 39. Closing the app and reopening loses the paired watch and smart scale. — FIXED ✅
+
+**Root cause:** `DeviceStore`/`WatchStore` persisted with
+`encoder.dateEncodingStrategy = .iso8601` but loaded with a **default-strategy
+decoder** — `JSONDecoder().decode` threw on the first date, `try?` swallowed it,
+and the inventory came back empty on every relaunch (other stores already set
+the matching strategy; these two predated that convention). Both loaders now set
+`.iso8601`, with cross-instance round-trip regression tests in `ModelTests`.
