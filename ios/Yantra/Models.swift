@@ -39,7 +39,7 @@ struct MeasurementRecord: Identifiable, Codable, Equatable {
     }
 }
 
-/// Thread-safe local JSON store (Application Support/Firefly/measurements.json).
+/// Thread-safe local JSON store (Application Support/Yantra/measurements.json).
 final class MeasurementStore {
     static let shared = MeasurementStore()
 
@@ -50,7 +50,7 @@ final class MeasurementStore {
     init(directory: URL? = nil) {
         let dir = directory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Firefly", isDirectory: true)
+            .appendingPathComponent("Yantra", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("measurements.json")
     }
@@ -203,7 +203,7 @@ struct Person: Identifiable, Codable, Equatable {
     }
 }
 
-/// Thread-safe local JSON store for people (Application Support/Firefly/people.json).
+/// Thread-safe local JSON store for people (Application Support/Yantra/people.json).
 /// Mutations update the published array immediately and persist synchronously
 /// (writes are tiny and rare; keeps tests/UI crash-consistent).
 final class PersonStore: ObservableObject {
@@ -221,7 +221,7 @@ final class PersonStore: ObservableObject {
     init(directory: URL? = nil) {
         let dir = directory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Firefly", isDirectory: true)
+            .appendingPathComponent("Yantra", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("people.json")
         people = Self.load(from: fileURL)
@@ -385,7 +385,7 @@ final class CalibrationStore: ObservableObject {
     init(directory: URL? = nil) {
         let base = directory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Firefly", isDirectory: true)
+            .appendingPathComponent("Yantra", isDirectory: true)
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         self.dir = base
         samples = Self.loadSamples(url: base.appendingPathComponent("calibration-samples.json"))
@@ -480,7 +480,7 @@ final class BindStore {
 
     private let url = FileManager.default.urls(
         for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Firefly/bind.json", isDirectory: false)
+        .appendingPathComponent("Yantra/bind.json", isDirectory: false)
 
     var record: Record? {
         get {

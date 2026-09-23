@@ -54,4 +54,4 @@ DiscoveredScale {
 ## 6. Notes
 
 - iOS cannot read raw MAC; use `CBPeripheral.identifier` and persist it. Bind record must therefore store both identifier and (from GATT `180a:2a25` serial / deviceId) a stable cross-platform key.
-- The official filter also matches MAC-prefix conventions (`0`/`1` first nibble); Firefly treats the service-UUID filter + name check as sufficient and more robust.
+- The official filter also matches MAC-prefix conventions (`0`/`1` first nibble); Yantra treats the service-UUID filter + name check as sufficient and more robust.

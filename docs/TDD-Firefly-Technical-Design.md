@@ -1,4 +1,4 @@
-# Firefly — Technical Design Document (TDD)
+# Yantra — Technical Design Document (TDD)
 
 Version 1.0 · 2026-09-20 · Companion to SRD-000…SRD-007
 Evidence base: `../analysis/PROTOCOL_ANALYSIS.md` (decompiled Lifesense stack) + live BLE capture (`../analysis/tools/ble_scan.swift`, 2026-09-20).
@@ -7,7 +7,7 @@ Evidence base: `../analysis/PROTOCOL_ANALYSIS.md` (decompiled Lifesense stack) +
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                            Firefly App (iOS/Android)                   │
+│                            Yantra App (iOS/Android)                   │
 │                                                                        │
 │  ┌──────────┐   ┌───────────────────────┐   ┌──────────────────────┐   │
 │  │ UI Layer │──▶│ Domain / Feature Layer │──▶│ Persistence Layer    │   │

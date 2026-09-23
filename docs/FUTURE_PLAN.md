@@ -1,4 +1,4 @@
-# Firefly — Future Plan & Roadmap
+# Yantra — Future Plan & Roadmap
 
 Baseline: SRD-000…007, TDD, DIAGRAMS, FEASIBILITY_AND_UNKNOWNS (2026-09-20).
 
@@ -22,7 +22,7 @@ Baseline: SRD-000…007, TDD, DIAGRAMS, FEASIBILITY_AND_UNKNOWNS (2026-09-20).
 - Exit status: **protocol fully hardware-verified end-to-end from our own Swift stack** — bind, login, config, live weigh-in streaming, and post-measurement record pull, no official app involved. Phase 1 complete.
 
 ## Phase 2 — iOS app skeleton (week 3–5)
-- [x] **Firefly iOS app scaffolded (`ios/`, xcodegen `project.yml` → `Firefly.xcodeproj`):** SwiftUI app targeting iOS 17, links ScaleKit via local SwiftPM; Info.plist Bluetooth usage strings, `bluetooth-central` background mode, HealthKit entitlement.
+- [x] **Yantra iOS app scaffolded (`ios/`, xcodegen `project.yml` → `Yantra.xcodeproj`):** SwiftUI app targeting iOS 17, links ScaleKit via local SwiftPM; Info.plist Bluetooth usage strings, `bluetooth-central` background mode, HealthKit entitlement.
 - [x] **BLE central (`ScaleCentral.swift`)** — faithful port of the wire-verified `BleHost` pipeline: scan → connect → sequential reads → **4-CCCD subscribe gate (A620 first)** → Pair/Session machine plumbing, 3 s ACK-resend watchdog, `0x4801` arm on `.live`, mfg-data MAC parsing (reversed bytes), record collection into the local store.
 - [x] **Pair/bind UI + slot management (SRD-002):** scan list (RSSI/MAC), slot picker 1–5, bind action → `PairStateMachine`; bind record persisted (`BindStore`).
 - [x] **Measure screen (SRD-003):** live record card (weight/impedance/timestamp, numeric transitions), stage status, failure surfacing; records dedup-stored (`MeasurementStore`, key = deviceId+UTC±1s+weight per SRD-004 FR-3).

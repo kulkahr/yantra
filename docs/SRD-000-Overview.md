@@ -1,11 +1,11 @@
-# SRD-000 — Firefly: Privacy-First Smart Scale Client — Overview
+# SRD-000 — Yantra: Privacy-First Smart Scale Client — Overview
 
 Version 1.0 · 2026-09-20 · Status: DRAFT
 Companion analysis: `../analysis/PROTOCOL_ANALYSIS.md`, `../analysis/IOS_COMPATIBILITY_RESEARCH.md`
 
 ## 1. Vision
 
-**Firefly** is a privacy-first mobile app that talks *directly* to the realme Smart Scale (Lifesense LS213-B) over BLE. It replaces realme Link for scale owners who do not want an account, a cloud, or telemetry: measurements live on the phone (and only there, unless the user opts into HealthKit/Apple Health export).
+**Yantra** is a privacy-first mobile app that talks *directly* to the realme Smart Scale (Lifesense LS213-B) over BLE. It replaces realme Link for scale owners who do not want an account, a cloud, or telemetry: measurements live on the phone (and only there, unless the user opts into HealthKit/Apple Health export).
 
 ## 2. Why this is possible (evidence)
 
@@ -51,5 +51,5 @@ Companion analysis: `../analysis/PROTOCOL_ANALYSIS.md`, `../analysis/IOS_COMPATI
 ## 6. Assumptions
 
 - Scale firmware is the current shipping LS213-B generation supporting A6 protocol with `Security.code` "1.4.0.25" behavior (XOR obfuscation active for fw ≥ 1.4.0.25; both variants supported).
-- One scale, up to 5 user slots (GUEST + USER1–4); Firefly occupies one slot.
+- One scale, up to 5 user slots (GUEST + USER1–4); Yantra occupies one slot.
 - Body-composition formulas are computed client-side from weight + impedance + user profile.

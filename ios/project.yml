@@ -1,4 +1,4 @@
-name: Firefly
+name: Yantra
 options:
   bundleIdPrefix: app.firefly
   deploymentTarget:
@@ -12,44 +12,44 @@ settings:
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: 1
 targets:
-  Firefly:
+  Yantra:
     type: application
     platform: iOS
-    sources: [Firefly]
+    sources: [Yantra]
     dependencies:
       - package: ScaleKit
     info:
-      path: Firefly/Info.plist
+      path: Yantra/Info.plist
       properties:
-        CFBundleDisplayName: Firefly
+        CFBundleDisplayName: Yantra
         UILaunchScreen: {}
-        NSBluetoothAlwaysUsageDescription: "Firefly connects to your realme Smart Scale to display and store your weight measurements locally on this device."
-        NSBluetoothPeripheralUsageDescription: "Firefly connects to your realme Smart Scale to display and store your weight measurements locally on this device."
-        NSHealthShareUsageDescription: "Firefly saves your body metrics to Apple Health only when you turn on Health export."
-        NSHealthUpdateUsageDescription: "Firefly saves your body metrics to Apple Health only when you turn on Health export."
+        NSBluetoothAlwaysUsageDescription: "Yantra connects to your realme Smart Scale to display and store your weight measurements locally on this device."
+        NSBluetoothPeripheralUsageDescription: "Yantra connects to your realme Smart Scale to display and store your weight measurements locally on this device."
+        NSHealthShareUsageDescription: "Yantra saves your body metrics to Apple Health only when you turn on Health export."
+        NSHealthUpdateUsageDescription: "Yantra saves your body metrics to Apple Health only when you turn on Health export."
         UIBackgroundModes: [bluetooth-central]
         ITSAppUsesNonExemptEncryption: false
     entitlements:
-      path: Firefly/Firefly.entitlements
+      path: Yantra/Yantra.entitlements
       properties:
         com.apple.developer.healthkit: true
-  FireflyTests:
+  YantraTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [FireflyTests]
+    sources: [YantraTests]
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
     dependencies:
-      - target: Firefly
+      - target: Yantra
 schemes:
-  Firefly:
+  Yantra:
     build:
       targets:
-        Firefly: all
-        FireflyTests: [test]
+        Yantra: all
+        YantraTests: [test]
     run:
       config: Debug
     test:
       config: Debug
-      targets: [FireflyTests]
+      targets: [YantraTests]

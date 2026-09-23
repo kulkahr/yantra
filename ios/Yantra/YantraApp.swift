@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct FireflyApp: App {
+struct YantraApp: App {
     @StateObject private var central = ScaleCentral()
 
     var body: some Scene {

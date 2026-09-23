@@ -4,7 +4,7 @@ Parent: SRD-000 · Priority P1 · Protocol source: `DeviceSyncCentre`, `DataPars
 
 ## 1. Purpose
 
-Drain measurements the scale stored in its own memory (weigh-ins performed while no phone was connected) into Firefly's local history, and optionally clear scale memory.
+Drain measurements the scale stored in its own memory (weigh-ins performed while no phone was connected) into Yantra's local history, and optionally clear scale memory.
 
 ## 2. How sync is triggered
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Extended GATT UUIDs — used by every host (a6host CLI + Firefly iOS app).
+/// Extended GATT UUIDs — used by every host (a6host CLI + Yantra iOS app).
 /// `a6Broadcast`/`otaData` are wire-verified requirements (REPLICATION.md fact #2):
 /// the scale only challenges peers that subscribe all four notifiable channels.
 public enum GATTPlus {

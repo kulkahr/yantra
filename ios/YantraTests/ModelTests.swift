@@ -1,5 +1,5 @@
 import XCTest
-@testable import Firefly
+@testable import Yantra
 import ScaleKit
 
 final class ModelTests: XCTestCase {

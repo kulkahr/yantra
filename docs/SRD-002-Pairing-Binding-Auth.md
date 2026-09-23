@@ -4,7 +4,7 @@ Parent: SRD-000 · Priority P0 · Protocol source: `FatScalePairWorker`, `Protoc
 
 ## 1. Purpose
 
-Establish a trust relationship between Firefly and the scale: register a device ID, answer the scale's auth challenge, claim a user slot, and persist the bind record for future sessions.
+Establish a trust relationship between Yantra and the scale: register a device ID, answer the scale's auth challenge, claim a user slot, and persist the bind record for future sessions.
 
 ## 2. GATT resources used
 
@@ -80,6 +80,6 @@ BindRecord {
 ## 6. Acceptance criteria
 
 1. Fresh scale → bind succeeds end-to-end in < 30 s without touching realme Link.
-2. Scale bound in official app first → Firefly can bind an alternate slot or unbind the official one explicitly.
+2. Scale bound in official app first → Yantra can bind an alternate slot or unbind the official one explicitly.
 3. Killing the app mid-pair leaves the scale usable (timeouts fire, GATT closed cleanly).
 4. CRC-corrupted notify frames are ACK-failed and retransmitted.

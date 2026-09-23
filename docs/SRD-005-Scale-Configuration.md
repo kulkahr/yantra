@@ -4,7 +4,7 @@ Parent: SRD-000 · Priority P1 · Protocol source: `ProtocolCommand.getWeight*Fo
 
 ## 1. Purpose
 
-Keep the scale's settings aligned with Firefly: clock, display unit, per-slot user profile (needed for body-fat math), target weight, body-fat formula set, and heart-rate switch (if the variant supports it).
+Keep the scale's settings aligned with Yantra: clock, display unit, per-slot user profile (needed for body-fat math), target weight, body-fat formula set, and heart-rate switch (if the variant supports it).
 
 ## 2. Commands
 
@@ -26,7 +26,7 @@ Scale echoes settings back via `0x2001`/`0x2003`/`0x2004` (`RECEIVE_*`) and `0x1
 | ID | Requirement |
 |---|---|
 | FR-1 | App SHALL push TIME on every successful connect (records stored offline otherwise get wrong timestamps). |
-| FR-2 | App SHALL manage one profile per user slot (up to 5: GUEST + USER1–4) with local profiles in Firefly mapped to slots. |
+| FR-2 | App SHALL manage one profile per user slot (up to 5: GUEST + USER1–4) with local profiles in Yantra mapped to slots. |
 | FR-3 | App SHALL verify echoes (`0x2001`/`0x2003`/`0x2004`) and surface mismatch warnings. |
 | FR-4 | App SHALL let the user pick formula set and unit; defaults: metric/kg. |
 | FR-5 | App SHALL send all settings through the SRD-002 command queue (ACK + resend semantics). |
@@ -34,7 +34,7 @@ Scale echoes settings back via `0x2001`/`0x2003`/`0x2004` (`RECEIVE_*`) and `0x1
 
 ## 4. Acceptance criteria
 
-1. Change unit in Firefly → scale LED switches unit.
+1. Change unit in Yantra → scale LED switches unit.
 2. Wrong phone timezone → after connect, scale-stored records carry correct UTC.
 3. Profile edit (height/age/sex) reflected in subsequent body-fat computation (SRD-006) and echoed by scale.
 4. Setting a target shows progress toward target in history view.
