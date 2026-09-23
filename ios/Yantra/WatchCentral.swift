@@ -9,6 +9,15 @@ import ScaleKit
 /// resync) → live pushes stream. The protocol codec lives in ScaleKit
 /// (`KahaProtocol`); this class owns transport + published UI state,
 /// mirroring `ScaleCentral`.
+///
+/// Frame routing (decompiled ProtocolParser parity — fixes #34 and the
+/// start-workout no-op):
+/// - **Responses** arrive with class = request class | 0x80: sport/history
+///   acks on `0x81`, watch-face on `0x82`, device info on `0x80`.
+/// - **Watch-initiated events** keep the plain class: controls `0x01 0x05`,
+///   live data `0x06`.
+/// - **History** (HR/sleep/SpO2) streams as `0x7F` multipackets reassembled
+///   by `MultipacketAssembler`; the stream's cmd byte routes the decoder.
 final class WatchCentral: NSObject, ObservableObject {
 
     static let shared = WatchCentral()
@@ -49,6 +58,13 @@ final class WatchCentral: NSObject, ObservableObject {
     /// Latest workout summary days pulled (#28), most recent first.
     @Published private(set) var workoutDays: [WorkoutDay] = []
 
+    struct WorkoutDay: Identifiable, Equatable {
+        let id: Int            // daysAgo
+        let steps: Int
+        let calories: Double
+        let distanceMeters: Double
+    }
+
     /// Live sport session started from the phone (SRD-010 §9).
     struct SportSession: Equatable {
         let mode: KahaProtocol.SportMode
@@ -58,15 +74,9 @@ final class WatchCentral: NSObject, ObservableObject {
     }
     /// Non-nil while a phone-started workout is running on the watch.
     @Published private(set) var sportSession: SportSession?
-    /// Staged start request awaiting the watch ack (currentSportMode response).
+    /// Staged start request awaiting the `81 8B` ack.
     private var pendingSportStart: SportSession?
 
-    struct WorkoutDay: Identifiable, Equatable {
-        let id: Int            // daysAgo
-        let steps: Int
-        let calories: Double
-        let distanceMeters: Double
-    }
     @Published private(set) var foundWatches: [DiscoveredWatch] = []
 
     struct DiscoveredWatch: Identifiable, Equatable {
@@ -81,15 +91,17 @@ final class WatchCentral: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var chars: [CBUUID: CBCharacteristic] = [:]
     private var subscribed: Set<CBUUID> = []
-    private var firmwareReadPending = false
     private var handshakeDone = false
+    private var firmwareReadPending = false
     private var scanTimeout: DispatchWorkItem?
-    /// Peripheral id being paired (persisted into DeviceStore by the hub).
-    private var pendingPair: UUID?
     /// QR-pairing targets: MAC from the QR (logged only — iOS addresses by
     /// peripheral UUID) and the decoded name filter used to match advertisements.
     private var connectTargetMAC: String?
     private var connectTargetName: String?
+    private var pendingPair: UUID?
+
+    /// `0x7F` multipacket reassembly (history streams).
+    private let assembler = MultipacketAssembler()
 
     override init() {
         super.init()
@@ -104,14 +116,7 @@ final class WatchCentral: NSObject, ObservableObject {
         foundWatches = []
         stage = .scanning
         guard central.state == .poweredOn else { return }
-        let t = DispatchWorkItem { [weak self] in
-            guard let self, self.stage == .scanning else { return }
-            self.central.stopScan()
-            self.stage = .idle
-            self.appendLog("scan timed out (30 s)")
-        }
-        scanTimeout = t
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: t)
+        scheduleScanTimeout()
         // Nordic UART service filter — Storm Call 3 exposes it.
         central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
     }
@@ -121,6 +126,18 @@ final class WatchCentral: NSObject, ObservableObject {
         scanTimeout = nil
         central.stopScan()
         if stage == .scanning { stage = .idle }
+    }
+
+    private func scheduleScanTimeout() {
+        scanTimeout?.cancel()
+        let t = DispatchWorkItem { [weak self] in
+            guard let self, self.stage == .scanning else { return }
+            self.central.stopScan()
+            self.stage = .idle
+            self.appendLog("scan timed out (30 s)")
+        }
+        scanTimeout = t
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30, execute: t)
     }
 
     /// Pair: connect + handshake. The hub persists the inventory row
@@ -134,7 +151,11 @@ final class WatchCentral: NSObject, ObservableObject {
             central.connect(p)
             stage = .connecting
         } else {
-            stage = .failed("watch out of range — rescan")
+            // Issue #37: not in the system cache (stale row / rebooted phone) —
+            // rescan and auto-connect on the first matching advertisement
+            // instead of dead-ending in "out of range".
+            appendLog("watch not cached — rescanning to reconnect")
+            scanAndPair(nameFilter: watch.name)
         }
     }
 
@@ -166,17 +187,20 @@ final class WatchCentral: NSObject, ObservableObject {
         foundWatches = []
         stage = .scanning
         guard central.state == .poweredOn else { return }
+        scheduleScanTimeout()
         central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
     }
 
-    /// Name-filter scan → pair first matching advertisement (no MAC in QR).
-    private func scanAndPair(nameFilter: String) {
+    /// Name-filter scan → pair first matching advertisement. `nil` filter
+    /// pairs the first STORMCALL advertisement (issue #37 retry path).
+    private func scanAndPair(nameFilter: String?) {
         connectTargetMAC = nil
-        connectTargetName = nameFilter.uppercased()
+        connectTargetName = nameFilter?.uppercased()
         resetLink()
         foundWatches = []
         stage = .scanning
         guard central.state == .poweredOn else { return }
+        scheduleScanTimeout()
         central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
     }
 
@@ -184,14 +208,14 @@ final class WatchCentral: NSObject, ObservableObject {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil
         handshakeDone = false
+        assembler.reset()
         stage = .idle
     }
 
-    // MARK: - History (SRD-010 §5 acceptance 3)
+    // MARK: - History (SRD-010 §5 acceptance 3, #34)
 
-    /// Requests one day of HR/BP history (day = 0 → today). Samples land in
-    /// `hrSamples`; the watch UI renders them as a timeline. The interval
-    /// command doubles as the auto-measure enabler (Crest parity, 60 min).
+    /// Requests one day of HR/BP history (day = 0 → today). The response
+    /// streams back as `0x7F` multipackets; the assembler feeds the decoder.
     func loadHRHistory(day: Int) {
         hrDay = day
         hrDated = []
@@ -228,6 +252,7 @@ final class WatchCentral: NSObject, ObservableObject {
         subscribed = []
         firmwareReadPending = false
         handshakeDone = false
+        assembler.reset()
     }
 
     private func send(_ bytes: [UInt8]) {
@@ -245,7 +270,7 @@ final class WatchCentral: NSObject, ObservableObject {
     }
 
     private func requestInfo() {
-        // Info request burst — responses arrive as frames on the UART notify char.
+        // Info request burst — responses arrive as 80-class frames.
         send(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getDeviceName))
         send(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getFirmwareVersion))
         send(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getDeviceTime))
@@ -267,8 +292,14 @@ final class WatchCentral: NSObject, ObservableObject {
         send(KahaProtocol.requestCurrentWatchFace())
     }
 
+    // MARK: - Frame handling
+
+    /// One parsed notification dispatched by class/cmd per the ProtocolParser
+    /// map. Response classes carry the `| 0x80` bit; events keep the plain class.
     private func handleFrame(_ frame: KahaProtocol.Frame) {
         switch (frame.classId, frame.cmdId) {
+
+        // --- Live pushes (watch-initiated, plain class 0x06) ---
         case (KahaProtocol.ClassId.live, KahaProtocol.LiveCmd.liveHealth):
             if let h = KahaProtocol.decodeLiveHealth(frame.payload) {
                 liveHealth = h
@@ -280,36 +311,22 @@ final class WatchCentral: NSObject, ObservableObject {
                 persistLiveSteps()
                 appendLog("live steps \(s.steps)")
             }
-        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.hrBpInterval):
-            // History day response — samples are 4-byte HR/BP records.
-            hrDated = KahaProtocol.decodeHRHistory(frame.payload, intervalMinutes: 60,
-                                                   startHour: 0, day: hrDay)
-            persistHRDay()
-            appendLog("HR history: \(hrDated.count) samples")
-        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.sleepHistory):
-            // 10-min sleep day — 6 bytes/hour of 4×2-bit stages (2.5 min each).
-            sleepHours = KahaProtocol.decodeSleepHistory(frame.payload, startHour: 0)
-            persistSleepDay()
-            appendLog("sleep history: \(sleepHours.count) hours · " +
-                      String(format: "%.0f", sleepHours.reduce(0) { $0 + $1.totalSleepMinutes }) + " min sleep")
-        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.spo2History):
-            // Periodic SpO2 day — one byte per 5-min slot, 0xFF = no reading.
-            spo2Samples = KahaProtocol.decodeSpo2History(frame.payload, startHour: 0,
-                                                         day: hrDay)
-            persistSpo2Day()
-            if let avg = spo2Average {
-                appendLog("SpO2 history: \(spo2Samples.count) samples · avg \(avg)%")
-            } else {
-                appendLog("SpO2 history: no valid samples")
+
+        // --- Watch-initiated control events (plain class 0x01, cmd 0x05) ---
+        case (KahaProtocol.ClassId.fitness, 0x05):
+            if let event = KahaProtocol.decodeWatchControl(frame) {
+                lastWatchEvent = event
+                handleWatchEvent(event)
             }
-        case (KahaProtocol.ClassId.fitness, 0x23):
-            // Workout day summary (#28): steps u32 + meters f32 + kcal f32.
-            if let day = decodeWorkoutSummary(frame.payload) {
-                workoutDays.insert(day, at: 0)
-                appendLog("workout day -\(day.id): \(day.steps) steps · \(Int(day.distanceMeters)) m")
+
+        // --- Latest-health one-shot (response 80 0A) ---
+        case (KahaProtocol.ClassId.responseInfo, KahaProtocol.FitnessCmd.latestHealth):
+            if let lh = KahaProtocol.decodeLatestHealth(frame.payload) {
+                appendLog("latest health: value \(lh.value) @ \(Date(timeIntervalSince1970: TimeInterval(lh.secondsSinceEpoch)))")
             }
-        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.currentSportMode):
-            // Session start/stop ack — payload[0]=1 means the watch entered the mode.
+
+        // --- Sport session acks (response class 0x81) ---
+        case (KahaProtocol.ClassId.responseFitness, KahaProtocol.FitnessCmd.currentSportMode):
             if let ok = KahaProtocol.decodeSportAck(frame.payload) {
                 if ok, let pending = pendingSportStart {
                     sportSession = pending
@@ -324,24 +341,40 @@ final class WatchCentral: NSObject, ObservableObject {
                 }
                 pendingSportStart = nil
             }
-        case (KahaProtocol.ClassId.fitness, KahaProtocol.FitnessCmd.activityPause):
+        case (KahaProtocol.ClassId.responseFitness, KahaProtocol.FitnessCmd.activityPause):
             if let ok = KahaProtocol.decodeSportAck(frame.payload), var session = sportSession {
-                session.paused = !ok ? session.paused : !session.paused
+                session.paused = ok ? !session.paused : session.paused
                 appendLog(ok ? (session.paused ? "session paused" : "session resumed") : "pause/resume rejected")
                 sportSession = session
             }
-        case (KahaProtocol.ClassId.alerts, KahaProtocol.SystemCmd.watchFaceList):
+
+        // --- Watch-face acks (response class 0x82) ---
+        case (KahaProtocol.ClassId.responseAlerts, KahaProtocol.SystemCmd.watchFaceList):
             watchFaceIds = KahaProtocol.decodeWatchFaceList(frame.payload)
             appendLog("watch faces: \(watchFaceIds.map(String.init).joined(separator: ", "))")
-        case (KahaProtocol.ClassId.alerts, KahaProtocol.SystemCmd.watchFaceCurrent):
+        case (KahaProtocol.ClassId.responseAlerts, KahaProtocol.SystemCmd.watchFaceCurrent):
             currentWatchFaceId = KahaProtocol.decodeCurrentWatchFace(frame.payload)
+
         default:
-            if let event = KahaProtocol.decodeWatchControl(frame) {
-                lastWatchEvent = event
-                handleWatchEvent(event)
-                return
-            }
             handleInfoResponse(frame)
+        }
+    }
+
+    /// Info-class responses arrive with the `| 0x80` bit set (0x80 cmd echo).
+    private func handleInfoResponse(_ frame: KahaProtocol.Frame) {
+        guard frame.classId == KahaProtocol.ClassId.responseInfo else { return }
+        // Response cmd = request cmd (echo) — decode by the plain request id.
+        switch frame.cmdId {
+        case KahaProtocol.InfoCmd.getDeviceName:
+            deviceName = frame.payload.asciiString
+        case KahaProtocol.InfoCmd.getFirmwareVersion:
+            firmwareVersion = frame.payload.asciiString
+        case KahaProtocol.InfoCmd.getDeviceTime:
+            watchTime = KahaProtocol.decodeDeviceTime(frame.payload)
+        case KahaProtocol.InfoCmd.getBatteryLevel:
+            batteryPercent = KahaProtocol.decodeBattery(frame.payload)
+        default:
+            break
         }
     }
 
@@ -355,16 +388,25 @@ final class WatchCentral: NSObject, ObservableObject {
                           distanceMeters: Double(KahaProtocol.leFloat(p, 4)))
     }
 
-    /// Reacts to watch-initiated control pushes (#25/#26/#30).
+    /// Reacts to watch-initiated control pushes (#25/#26/#30/#35/#36).
+    /// Coordinator hops run on the main actor — handleWatchEvent executes in a
+    /// synchronous nonisolated context (CBPeripheralDelegate path).
     private func handleWatchEvent(_ event: KahaProtocol.WatchControlEvent) {
         switch event {
         case .findMyPhone:
-            appendLog("watch asks: find my phone")
-            // Haptic + alert are UI concerns; state is published above.
+            // #35: ring + vibrate the phone, not just a notification.
+            Task { @MainActor in
+                FindPhoneCoordinator.shared.begin()
+            }
+            appendLog("watch asks: find my phone — ringing & vibrating")
         case .cameraEnter:
-            appendLog("watch: camera remote entered")
+            appendLog("watch: camera remote")
         case .cameraCapture:
-            appendLog("watch: shutter request")
+            // #36: take a real photo from the watch shutter.
+            Task { @MainActor in
+                WatchCameraCoordinator.shared.captureFromWatch()
+            }
+            appendLog("watch: shutter — capturing photo")
         case .callReject, .callMute:
             let action = (event == .callReject) ? "reject" : "mute"
             appendLog("watch: call \(action)")
@@ -400,8 +442,11 @@ final class WatchCentral: NSObject, ObservableObject {
         send(KahaProtocol.setMusicVolume(percent: percent))
     }
 
+    /// Phone→watch camera-status command (#25): tells the watch the phone
+    /// camera session is active so its remote-shutter button works.
     func cameraRemote(enter: Bool) {
         send(KahaProtocol.setCameraRemote(enter: enter))
+        appendLog("camera remote \(enter ? "entered" : "left")")
     }
 
     func findMyWatch(start: Bool) {
@@ -423,7 +468,7 @@ final class WatchCentral: NSObject, ObservableObject {
     // MARK: - Sport session control (SRD-010 §9)
 
     /// Start a workout on the watch (running/walking/cycling/swimming/taichi).
-    /// Watch acks `01 8B` with payload[0]=1, then shows its sport screen.
+    /// Watch acks `81 8B` with payload[0]=1, then shows its sport screen.
     func startWorkout(_ mode: KahaProtocol.SportMode, indoor: Bool = false) {
         guard sportSession == nil else {
             appendLog("a session is already running — end it first")
@@ -434,11 +479,11 @@ final class WatchCentral: NSObject, ObservableObject {
         appendLog("starting \(mode) workout…")
     }
 
-    /// Phone-side stop: re-select mode 0; the watch acks with 0 (refused) and we
-    /// clear the session, then pull today's summary. If the watch ends it from
-    /// its own screen the same summary pull happens via the ack path.
+    /// Phone-side stop: re-select mode 0; the watch acks with 0 and we
+    /// clear the session, then pull today's summary.
     func endWorkout() {
         guard sportSession != nil else { return }
+        pendingSportStart = nil
         send(KahaProtocol.stopSportMode())
         appendLog("ending workout…")
     }
@@ -453,23 +498,51 @@ final class WatchCentral: NSObject, ObservableObject {
         send(KahaProtocol.resumeSportSession())
     }
 
-    // MARK: - Persistence (WatchStore, SRD-010 FR-2)
+    // MARK: - History data dispatch (multipacket complete, #34)
+
+    /// Routes an assembled history stream by its cmd byte, then persists.
+    private func deliverHistoryData(cmd: UInt8, data: [UInt8]) {
+        switch cmd {
+        case KahaProtocol.FitnessCmd.hrBpInterval:
+            hrDated = KahaProtocol.decodeHRHistory(data, intervalMinutes: 60,
+                                                   startHour: 0, day: hrDay)
+            persistHRDay()
+            appendLog("HR history: \(hrDated.count) samples")
+        case KahaProtocol.FitnessCmd.sleepHistory:
+            sleepHours = KahaProtocol.decodeSleepHistory(data, startHour: 0)
+            persistSleepDay()
+            let total = sleepHours.reduce(0.0) { $0 + $1.totalSleepMinutes }
+            appendLog("sleep history: \(sleepHours.count) hours · \(String(format: "%.0f", total)) min sleep")
+        case KahaProtocol.FitnessCmd.spo2History:
+            spo2Samples = KahaProtocol.decodeSpo2History(data, startHour: 0, day: hrDay)
+            persistSpo2Day()
+            if let avg = spo2Average {
+                appendLog("SpO2 history: \(spo2Samples.count) samples · avg \(avg)%")
+            } else {
+                appendLog("SpO2 history: no valid samples")
+            }
+        default:
+            appendLog("history stream cmd 0x\(String(cmd, radix: 16)) (\(data.count) bytes) — no decoder")
+        }
+    }
 
     var spo2Average: Int? {
         guard !spo2Samples.isEmpty else { return nil }
         return spo2Samples.map { $0.percent }.reduce(0, +) / spo2Samples.count
     }
 
+    // MARK: - Persistence (WatchStore, SRD-010 FR-2)
+
     /// Persistence helpers hop to the main actor — `handleFrame` runs from the
     /// nonisolated CBPeripheralDelegate conformance.
     private func persistHRDay() {
-        let byHour: [Int: Int] = Dictionary(uniqueKeysWithValues: hrDated.compactMap { entry in
+        let byHour: [Int: Int] = Dictionary(hrDated.compactMap { entry in
             entry.sample.heartRate > 0
                 ? (Calendar.current.component(.hour, from: entry.date), entry.sample.heartRate)
                 : nil
-        })
+        }, uniquingKeysWith: { _, new in new })
         guard !byHour.isEmpty else { return }
-        let key = WatchStore.dayKey(for: Date())
+        let key = WatchStore.dayKey(for: Date().addingTimeInterval(Double(-hrDay) * 86_400))
         Task { @MainActor in
             WatchStore.shared.upsert(day: key, hrByHour: byHour)
         }
@@ -477,7 +550,7 @@ final class WatchCentral: NSObject, ObservableObject {
 
     private func persistSleepDay() {
         guard !sleepHours.isEmpty else { return }
-        let key = WatchStore.dayKey(for: Date())
+        let key = WatchStore.dayKey(for: Date().addingTimeInterval(Double(-hrDay) * 86_400))
         let hours = sleepHours
         Task { @MainActor in
             for h in hours {
@@ -488,7 +561,7 @@ final class WatchCentral: NSObject, ObservableObject {
 
     private func persistSpo2Day() {
         guard !spo2Samples.isEmpty else { return }
-        let key = WatchStore.dayKey(for: Date())
+        let key = WatchStore.dayKey(for: Date().addingTimeInterval(Double(-hrDay) * 86_400))
         let samples = spo2Samples
         Task { @MainActor in
             WatchStore.shared.upsert(day: key, spo2: samples)
@@ -501,22 +574,6 @@ final class WatchCentral: NSObject, ObservableObject {
         Task { @MainActor in
             WatchStore.shared.upsert(day: key, steps: s.steps,
                                      calories: s.calories, distanceMeters: s.meters)
-        }
-    }
-
-    private func handleInfoResponse(_ frame: KahaProtocol.Frame) {
-        guard frame.classId == KahaProtocol.ClassId.info else { return }
-        switch frame.cmdId {
-        case KahaProtocol.InfoCmd.getDeviceName:
-            deviceName = frame.payload.asciiString
-        case KahaProtocol.InfoCmd.getFirmwareVersion:
-            firmwareVersion = frame.payload.asciiString
-        case KahaProtocol.InfoCmd.getDeviceTime:
-            watchTime = KahaProtocol.decodeDeviceTime(frame.payload)
-        case KahaProtocol.InfoCmd.getBatteryLevel:
-            batteryPercent = KahaProtocol.decodeBattery(frame.payload)
-        default:
-            break
         }
     }
 
@@ -550,12 +607,11 @@ extension WatchCentral: CBCentralManagerDelegate {
         } else if !upper.contains("STORMCALL") {
             return
         }
-        // QR path with MAC — the watch name itself carries the MAC tail
-        // (e.g. stormcall_3_0610); accept by name-filter match, then connect.
         let entry = DiscoveredWatch(id: peripheral.identifier, name: n, rssi: RSSI.intValue)
         if !foundWatches.contains(entry) { foundWatches.append(entry) }
-        // Auto-pair on first hit when pairing was initiated by QR/MAC.
-        if connectTargetName != nil {
+        // Auto-pair on first hit when pairing was initiated by QR/MAC or by a
+        // cache-miss retry (issue #37).
+        if connectTargetName != nil || pendingPair != nil {
             stopScan()
             pendingPair = peripheral.identifier
             resetLink()
@@ -588,10 +644,6 @@ extension WatchCentral: CBCentralManagerDelegate {
 extension WatchCentral: CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
-        guard error == nil else {
-            stage = .failed("service discovery failed")
-            return
-        }
         for s in peripheral.services ?? [] {
             peripheral.discoverCharacteristics(nil, for: s)
         }
@@ -605,28 +657,11 @@ extension WatchCentral: CBPeripheralDelegate {
             if c.uuid == cb(KahaProtocol.GATT.uartRead) || c.uuid == cb(KahaProtocol.GATT.batteryLevel) {
                 subscribe(c)
             }
-        }
-        // Standard firmware read (0x2A26) once discovery settles — the UART
-        // burst fires when both CCCDs confirm (didUpdateNotificationStateFor).
-        if chars[cb(KahaProtocol.GATT.uartRead)] != nil,
-           chars[cb(KahaProtocol.GATT.batteryLevel)] != nil,
-           !firmwareReadPending, !handshakeDone {
-            firmwareReadPending = true
-            if let fw = chars[cb(KahaProtocol.GATT.firmwareRevision)] {
-                peripheral.readValue(for: fw)
-            } else {
-                requestInfo()
+            if c.uuid == cb(KahaProtocol.GATT.firmwareRevision), !firmwareReadPending {
+                firmwareReadPending = true
+                peripheral.readValue(for: c)
             }
         }
-    }
-
-    func peripheral(_ peripheral: CBPeripheral,
-                    didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
-        guard error == nil else {
-            appendLog("✗ subscribe failed: \(characteristic.uuid)")
-            return
-        }
-        appendLog("notify on \(characteristic.uuid.uuidString.prefix(8))")
         // Both CCCDs up (and no pending standard reads) → info request burst.
         if subscribed.contains(cb(KahaProtocol.GATT.uartRead)),
            subscribed.contains(cb(KahaProtocol.GATT.batteryLevel)),
@@ -654,7 +689,14 @@ extension WatchCentral: CBPeripheralDelegate {
             }
             return
         }
-        if let frame = KahaProtocol.parse([UInt8](v)) {
+        let raw = [UInt8](v)
+        // `0x7F` multipackets are reassembled; complete streams dispatch by the
+        // stream's cmd byte (#34). Everything else parses as a plain frame.
+        for (cmd, data) in assembler.feed(raw) {
+            deliverHistoryData(cmd: cmd, data: data)
+        }
+        if raw.first != KahaProtocol.ClassId.multipacket,
+           let frame = KahaProtocol.parse(raw) {
             handleFrame(frame)
         }
     }
@@ -668,5 +710,5 @@ private extension Array where Element == UInt8 {
         guard let s = String(data: d, encoding: .utf8) else { return nil }
         return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : s
     }
-    var hexString: String { map { String(format: "%02X", $0) }.joined() }
+    var hexString: String { map { String(format: "%02X", $0) }.joined(separator: " ") }
 }
