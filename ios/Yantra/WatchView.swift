@@ -38,6 +38,7 @@ struct WatchView: View {
         .onChange(of: watch.lastWatchEvent) { _, e in
             if e == .findMyPhone { findPhoneAlert = true }   // #30
         }
+        .onAppear { watch.reconnectIfPaired() }   // #43: auto-connect stored watch
     }
 
     @State private var findPhoneAlert = false
@@ -93,6 +94,7 @@ struct WatchView: View {
             case .failed(let msg):
                 Label(msg, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
+                Button("Connect paired watch") { watch.reconnectIfPaired() }
                 Button("Scan again") { watch.startScan() }
                 Button {
                     showQRScanner = true

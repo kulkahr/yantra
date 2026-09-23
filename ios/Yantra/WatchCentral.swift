@@ -176,20 +176,48 @@ final class WatchCentral: NSObject, ObservableObject {
     /// Pair: connect + handshake. The hub persists the inventory row
     /// (DeviceStore) — this only manages the link.
     func pair(_ watch: DiscoveredWatch) {
-        pendingPair = watch.id
-        registerInInventory(peripheralId: watch.id, name: watch.name)
+        connectStored(peripheralId: watch.id, name: watch.name)
+    }
+
+    // MARK: Reconnect from persisted inventory (issue #43)
+
+    /// Deferred reconnect while Bluetooth powers up.
+    private var deferredReconnect: (id: UUID, name: String)?
+
+    /// Reconnects to the stored watch when this view opens (hub row tap).
+    /// No-op unless the link is idle/failed — never fights an active flow.
+    func reconnectIfPaired() {
+        switch stage {
+        case .idle, .failed: break
+        default: return
+        }
+        Task { @MainActor in
+            guard let stored = DeviceStore.shared.devices.first(where: { $0.kind == .watch })
+            else { return }
+            if central.state == .poweredOn {
+                connectStored(peripheralId: stored.peripheralId, name: stored.name)
+            } else {
+                // Bluetooth still powering up — run it from didUpdateState.
+                deferredReconnect = (stored.peripheralId, stored.name)
+                appendLog("waiting for Bluetooth to connect \(stored.name)…")
+            }
+        }
+    }
+
+    /// Direct connect from a persisted peripheral UUID; falls back to a
+    /// name-filtered rescan when iOS no longer caches the peripheral (#37).
+    private func connectStored(peripheralId: UUID, name: String) {
+        pendingPair = peripheralId
+        registerInInventory(peripheralId: peripheralId, name: name)
         resetLink()
-        if let p = central.retrievePeripherals(withIdentifiers: [watch.id]).first {
+        if let p = central.retrievePeripherals(withIdentifiers: [peripheralId]).first {
             peripheral = p
             p.delegate = self
             central.connect(p)
             stage = .connecting
         } else {
-            // Issue #37: not in the system cache (stale row / rebooted phone) —
-            // rescan and auto-connect on the first matching advertisement
-            // instead of dead-ending in "out of range".
             appendLog("watch not cached — rescanning to reconnect")
-            scanAndPair(nameFilter: watch.name)
+            scanAndPair(nameFilter: name)
         }
     }
 
@@ -745,8 +773,15 @@ final class WatchCentral: NSObject, ObservableObject {
 extension WatchCentral: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        guard central.state == .poweredOn, stage == .scanning else { return }
-        central.scanForPeripherals(withServices: nil, options: nil)
+        guard central.state == .poweredOn else { return }
+        if let d = deferredReconnect {
+            deferredReconnect = nil
+            connectStored(peripheralId: d.id, name: d.name)
+        } else if stage == .scanning {
+            // No service filter (#38): the Realtek/KaHa watch does not advertise
+            // the Nordic UART UUID — the official app scans by name only.
+            central.scanForPeripherals(withServices: nil, options: nil)
+        }
     }
 
     func centralManager(_ central: CBCentralManager,

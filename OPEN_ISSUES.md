@@ -546,3 +546,19 @@ queue the start goes out cleanly; additionally, on refusal the raw ack is
 logged and the app performs a **stop-then-start retry** (stop command →
 re-request start) once, since a watch-side session is the likeliest refusal
 reason. If the retry also fails the log says to end the watch-side session.
+
+## 43. After relaunch the paired watch shows in the hub, but tapping it never connects and asks to scan again. — FIXED ✅
+
+The #39 persistence fix made the inventory row survive relaunch, but tapping the
+row only opened the watch screen — nothing ever attempted a connection from the
+stored `peripheralId`, so the screen sat at "Scan for Storm Call 3". iOS supports
+direct reconnection via `retrievePeripherals(withIdentifiers:)` (the UUID was
+persisted all along). Now:
+
+- `WatchCentral.reconnectIfPaired()` runs on `WatchView.onAppear`: if the link is
+  idle/failed and a watch row exists, it connects directly from the stored UUID
+  (deferred until Bluetooth powers on if needed).
+- The same path backs the new **"Connect paired watch"** button in the failed
+  state (next to "Scan again").
+- Cache-miss falls back to the #37 name-filtered auto-pair rescan, so a rebooted
+  watch still reconnects without a manual scan.
