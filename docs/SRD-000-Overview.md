@@ -1,11 +1,11 @@
-# SRD-000 — Firefly: Privacy-First Smart Device Hub — Overview
+# SRD-000 — Yantra: Privacy-First Smart Device Hub — Overview
 
 Version 2.0 · 2026-09-23 · Status: IMPLEMENTED (scale complete; multi-device core per SRD-009)
 Companion analysis: `../analysis/PROTOCOL_ANALYSIS.md`, `../analysis/IOS_COMPATIBILITY_RESEARCH.md`
 
 ## 1. Vision
 
-**Firefly** is a privacy-first mobile hub that talks *directly* to smart devices over BLE. It started as a replacement for realme Link's smart-scale module (Lifesense LS213-B) for people who do not want an account, a cloud, or telemetry: measurements live on the phone (and only there, unless the user opts into Apple Health export). Per **SRD-009**, the app is now structured as a **multi-device hub** — the scale is the first fully-implemented driver, with smart-watch (SRD-010, planned) and smart-bulb (SRD-011, planned) drivers following the same architecture.
+**Yantra** is a privacy-first mobile hub that talks *directly* to smart devices over BLE. It started as a replacement for realme Link's smart-scale module (Lifesense LS213-B) for people who do not want an account, a cloud, or telemetry: measurements live on the phone (and only there, unless the user opts into Apple Health export). Per **SRD-009**, the app is now structured as a **multi-device hub** — the scale is the first fully-implemented driver, with smart-watch (SRD-010, planned) and smart-bulb (SRD-011, planned) drivers following the same architecture.
 
 ## 2. Why this is possible (evidence)
 
@@ -55,5 +55,5 @@ Companion analysis: `../analysis/PROTOCOL_ANALYSIS.md`, `../analysis/IOS_COMPATI
 ## 6. Assumptions
 
 - Scale firmware is the current shipping LS213-B generation supporting A6 protocol with `Security.code` "1.4.0.25" behavior (XOR obfuscation active for fw ≥ 1.4.0.25; both variants supported).
-- One scale, up to 5 user slots (GUEST + USER1–4); Firefly occupies one slot.
+- One scale, up to 5 user slots (GUEST + USER1–4); Yantra occupies one slot.
 - Body-composition formulas are computed client-side from weight + impedance + user profile.

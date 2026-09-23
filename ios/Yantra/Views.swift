@@ -839,10 +839,10 @@ struct FirmwareUpdateView: View {
             Form {
                 Section("How updating works") {
                     Text("1. Get the official firmware file (.bin) for your scale — "
-                         + "realme does not publish these; Firefly never downloads them.")
+                         + "realme does not publish these; Yantra never downloads them.")
                     Text("2. Trigger update mode: the scale reboots into its bootloader "
                          + "on its own and advertises as \"LsDfu…\".")
-                    Text("3. Firefly transfers and validates the image. Keep the phone "
+                    Text("3. Yantra transfers and validates the image. Keep the phone "
                          + "close and the scale still — losing power mid-update can "
                          + "brick the scale.")
                         .foregroundStyle(.orange)
@@ -929,7 +929,7 @@ struct CalibrationView: View {
             Section("Why") {
                 Text("The scale sends only weight + impedance; the official app computes " +
                      "the rest in its cloud. Weigh in, note the official app's values, " +
-                     "enter them here — after ≥ 4 samples Firefly refits its formulas " +
+                     "enter them here — after ≥ 4 samples Yantra refits its formulas " +
                      "to match (same person + profile each time).")
                     .font(.footnote).foregroundStyle(.secondary)
             }

@@ -51,5 +51,5 @@ Official app displays: weight, BMI, body-fat ratio, basal metabolism, muscle mas
 
 1. Device page shows all `180a` fields for the physical scale.
 2. Battery % decreases monotonically with scale usage and low-battery state matches scale's own low-battery indicator.
-3. Same user + same measurement in Firefly and realme Link → same BMI/fat% (±0.1).
+3. Same user + same measurement in Yantra and realme Link → same BMI/fat% (±0.1).
 4. Weight-only measurement (shoes on) → no fabricated body-fat values.

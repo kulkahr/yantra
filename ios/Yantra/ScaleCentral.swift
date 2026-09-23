@@ -2,7 +2,7 @@ import Foundation
 import CoreBluetooth
 import ScaleKit
 
-/// Firefly's BLE central — a faithful port of the hardware-verified `BleHost`
+/// Yantra's BLE central — a faithful port of the hardware-verified `BleHost`
 /// pipeline (REPLICATION.md wire facts):
 ///   discovery → sequential reads (best effort) → CCCDs on ALL FOUR notifiable
 ///   channels (A620 indicate first — the challenge gate) → machine start →

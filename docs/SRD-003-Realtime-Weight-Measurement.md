@@ -43,7 +43,7 @@ Show live weight while the user stands on the scale, and capture the stabilized 
 
 1. Step on scale → live number tracks movement within 0.3 s.
 2. Step off → final record saved with weight (2 decimals, kg), timestamp from scale (UTC), user slot, and impedance when the user is barefoot and profile pushed.
-3. Weight in Firefly matches scale LED and official realme Link reading ±0.05 kg.
+3. Weight in Yantra matches scale LED and official realme Link reading ±0.05 kg.
 4. Airplane-mode scale → app shows reconnect state per NFR-5 constants and recovers automatically when scale returns.
 
 ## 7. Privacy requirements

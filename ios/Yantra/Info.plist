@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Firefly</string>
+	<string>Yantra</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -23,13 +23,13 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Firefly connects to your realme Smart Scale to display and store your weight measurements locally on this device.</string>
+	<string>Yantra connects to your realme Smart Scale to display and store your weight measurements locally on this device.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
-	<string>Firefly connects to your realme Smart Scale to display and store your weight measurements locally on this device.</string>
+	<string>Yantra connects to your realme Smart Scale to display and store your weight measurements locally on this device.</string>
 	<key>NSHealthShareUsageDescription</key>
-	<string>Firefly saves your body metrics to Apple Health only when you turn on Health export.</string>
+	<string>Yantra saves your body metrics to Apple Health only when you turn on Health export.</string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>Firefly saves your body metrics to Apple Health only when you turn on Health export.</string>
+	<string>Yantra saves your body metrics to Apple Health only when you turn on Health export.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>bluetooth-central</string>

@@ -1,4 +1,4 @@
-# Firefly — Diagrams
+# Yantra — Diagrams
 
 All diagrams are Mermaid (render on GitHub/VS Code).
 
@@ -9,8 +9,8 @@ graph TB
     subgraph Users[" "]
         U[User]
     end
-    subgraph Firefly["Firefly app (iOS / Android)"]
-        APP[Firefly UI + ScaleKit]
+    subgraph Yantra["Yantra app (iOS / Android)"]
+        APP[Yantra UI + ScaleKit]
     end
     SCALE["realme Smart Scale (Lifesense LS213-B)"]
     HK["Apple Health / local CSV export (opt-in)"]
@@ -80,7 +80,7 @@ graph TB
 sequenceDiagram
     autonumber
     participant U as User
-    participant App as Firefly (ScaleKit)
+    participant App as Yantra (ScaleKit)
     participant BT as BLE stack
     participant S as Scale
 
@@ -111,7 +111,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
-    participant App as Firefly
+    participant App as Yantra
     participant S as Scale
 
     Note over App,S: auto-connect on app open (or near-scale trigger)
@@ -229,7 +229,7 @@ erDiagram
 graph LR
     SCALE[Scale] -->|BLE| SK[ScaleKit]
     SK --> DB[(Encrypted local DB)]
-    DB --> UI[Firefly UI]
+    DB --> UI[Yantra UI]
     DB -.->|opt-in export only| HK[Apple Health / CSV]
     SK -.-> X1["❌ no cloud"]
     SK -.-> X2["❌ no analytics"]
@@ -240,7 +240,7 @@ graph LR
 
 ```mermaid
 graph LR
-    SCALE[Scale] -->|A6/BLE| AND[Android phone: realme Link or Firefly-Android]
-    AND -->|LAN WebSocket / HTTP push| IOS[iPhone: Firefly ingest]
+    SCALE[Scale] -->|A6/BLE| AND[Android phone: realme Link or Yantra-Android]
+    AND -->|LAN WebSocket / HTTP push| IOS[iPhone: Yantra ingest]
     IOS --> HK[Apple Health]
 ```

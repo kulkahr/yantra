@@ -4,7 +4,7 @@ import ScaleKit
 /// SRD-009: the app-wide driver registry, built once at startup. Adding a
 /// device kind = implementing `DeviceDriver` + one line here.
 @MainActor
-enum FireflyDrivers {
+enum YantraDrivers {
     static let registry: DriverRegistry = {
         let r = DriverRegistry()
         r.register(ScaleDriver())
@@ -27,7 +27,7 @@ struct DevicesHubView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(FireflyDrivers.registry.allDrivers, id: \.kind) { driver in
+                ForEach(YantraDrivers.registry.allDrivers, id: \.kind) { driver in
                     section(for: driver)
                 }
             }
@@ -93,7 +93,7 @@ struct AddDeviceSheet: View {
             List {
                 if selectedKind == nil {
                     Section("What do you want to add?") {
-                        ForEach(FireflyDrivers.registry.allDrivers, id: \.kind) { driver in
+                        ForEach(YantraDrivers.registry.allDrivers, id: \.kind) { driver in
                             Button {
                                 if !driver.isStub {
                                     selectedKind = driver.kind

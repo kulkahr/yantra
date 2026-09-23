@@ -4,7 +4,7 @@ Parent: SRD-000 · Priority P1 · Related: SRD-003 (realtime), SRD-004 (history)
 
 ## 1. Purpose
 
-Several people share one physical scale. Firefly must (a) attribute live weigh-ins to the correct person, (b) never silently mis-attribute weigh-ins that happened while nobody was connected, and (c) let the user correct attribution later. The scale's `0x4802` record carries a `userId` byte whose slot semantics are **unverified** on the LS213-B firmware, so attribution is app-driven.
+Several people share one physical scale. Yantra must (a) attribute live weigh-ins to the correct person, (b) never silently mis-attribute weigh-ins that happened while nobody was connected, and (c) let the user correct attribution later. The scale's `0x4802` record carries a `userId` byte whose slot semantics are **unverified** on the LS213-B firmware, so attribution is app-driven.
 
 ## 2. Model
 
@@ -53,6 +53,6 @@ Body composition (SRD-006) uses the **weighing person's** profile (sex/age/heigh
 ## 7. Acceptance criteria
 
 1. Two people alternate stepping on the scale with active-person switching in between → each record attributed to the person active at weigh-in time.
-2. Weigh while Firefly is closed, then drain → record appears unassigned, History asks, assignment sticks across restarts.
+2. Weigh while Yantra is closed, then drain → record appears unassigned, History asks, assignment sticks across restarts.
 3. Removing a person keeps their historical records viewable (shown as "Unknown") and frees the slot for a new person.
 4. CSV opened in a spreadsheet shows a person column matching the UI.

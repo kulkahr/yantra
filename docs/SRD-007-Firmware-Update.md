@@ -4,7 +4,7 @@ Parent: SRD-000 · Priority P2 · Status: **implemented (ScaleKit DFU stack + iO
 
 ## 1. Purpose
 
-Recognize a scale in bootloader/DFU mode and, with a user-supplied official firmware file, perform the update. Firefly does **not** host or download firmware (privacy + supply-chain safety). Firmware **read-back from the scale is impossible** — the DFU service is write-only and the bootloader locks flash against readback; the practical "backup" is the firmware-metadata snapshot stored in the bind record plus keeping the matching official image file.
+Recognize a scale in bootloader/DFU mode and, with a user-supplied official firmware file, perform the update. Yantra does **not** host or download firmware (privacy + supply-chain safety). Firmware **read-back from the scale is impossible** — the DFU service is write-only and the bootloader locks flash against readback; the practical "backup" is the firmware-metadata snapshot stored in the bind record plus keeping the matching official image file.
 
 ## 2. DFU facts extracted from the official app
 
@@ -15,7 +15,7 @@ Recognize a scale in bootloader/DFU mode and, with a user-supplied official firm
 | Update sequence (`FatScaleOtaWorker`) | enable `1531` notify → `[0x01, binType]` START → size(LE32)+checkModel(4B)+version(4B)+CRC16(LE16) on `1532` → `[0x08,6,0]` INIT → `[0x03]` RECEIVE → 20-byte packets with flow control (pause every **6** frames until the `0x11` resume notify) → `[0x04]` VALIDATE → `[0x05]` ACTIVATE/RESET |
 | Device notifications | `[0x10, op, status]` acks (op 1 start / 3 receive / 4 validate), `[0x11]` flow resume |
 | Image container (`OtaHeader`) | magic(4) + version(4) + size(4) + createUtc(4) + md5(16), then 32-byte bin descriptors at offsets 32/64/96 — `BLE` (code 4), `SOC` (8), `WIFI` (9): version(4)·size(4)·flash-address(4)·crc16(4)·md5(16); content sits at its flash address, transport appends the CRC16 (LE32) and splits into 20-byte packets |
-| Update source | official app asks the realme cloud (`OtaApiHelper.getLastDfu2` with mac/otaVersion/app+user info) and downloads the file — requires a realme account; Firefly uses user-supplied files only |
+| Update source | official app asks the realme cloud (`OtaApiHelper.getLastDfu2` with mac/otaVersion/app+user info) and downloads the file — requires a realme account; Yantra uses user-supplied files only |
 | Failure path | official app offers "DFU again" dialog; reconnect loop (≤4 tries, 5 s delay) between bins |
 
 ## 3. Requirements
@@ -37,4 +37,4 @@ Recognize a scale in bootloader/DFU mode and, with a user-supplied official firm
 
 ## 5. Risks
 
-- Firmware images are signed/encrypted by Lifesense; Firefly only transports them. Version compatibility checks rely on the file's model code (LS/SD/BL) vs. current FW read via `180a:2a26`.
+- Firmware images are signed/encrypted by Lifesense; Yantra only transports them. Version compatibility checks rely on the file's model code (LS/SD/BL) vs. current FW read via `180a:2a26`.

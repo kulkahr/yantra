@@ -1,0 +1,460 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		3203598B59E19361870E5CFF /* MainTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61A077E6724728D5615A22BB /* MainTabView.swift */; };
+		3429633A6BCA1704FCA2A9C8 /* YantraApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 597C28F131C641DC2096CA18 /* YantraApp.swift */; };
+		387F7255776396CA745DDE37 /* ScaleKit in Frameworks */ = {isa = PBXBuildFile; productRef = E3F7937DCFF0422F4666F6A9 /* ScaleKit */; };
+		62A1737DD79B93CF9EC6799E /* DevicesHubView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1213AD115220626727ADF7F1 /* DevicesHubView.swift */; };
+		8888070E95FD0811443653F6 /* DeviceCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D46FB7FA98AA2B3BD343FB23 /* DeviceCore.swift */; };
+		A5D9BC8E0DA8F543D717E770 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44601735C06F8C0247172464 /* Models.swift */; };
+		A61C4A53C5C47F342C6BA30C /* ScaleCentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 998EEA6A67E542AB2088E8D3 /* ScaleCentral.swift */; };
+		CE21ACF9BF3A2309AB8590BA /* ModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33189F39AE7C6957F88C2D05 /* ModelTests.swift */; };
+		E28B09296359CFB9E48C4675 /* Export.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3061E75700AD499C6D276C4 /* Export.swift */; };
+		EAE43B31F4475EC67E0725EA /* Views.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BFF6A6DBE1BA46D72EE678F /* Views.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		9D099F7A821D80D1585E1949 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 1556795679ACC8882299E742 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 0A23ED4B223CF5BB70089988;
+			remoteInfo = Yantra;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		1213AD115220626727ADF7F1 /* DevicesHubView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevicesHubView.swift; sourceTree = "<group>"; };
+		1E0B152037C9C48C59884EA8 /* Yantra.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Yantra.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		23A94047CF87A064244D5995 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		33189F39AE7C6957F88C2D05 /* ModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelTests.swift; sourceTree = "<group>"; };
+		44601735C06F8C0247172464 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		597C28F131C641DC2096CA18 /* YantraApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = YantraApp.swift; sourceTree = "<group>"; };
+		61A077E6724728D5615A22BB /* MainTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MainTabView.swift; sourceTree = "<group>"; };
+		6BFF6A6DBE1BA46D72EE678F /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
+		7DDFCEE96EB7C620C9C1F42E /* YantraTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YantraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		8B3C48A161D199772C55E9B3 /* Yantra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Yantra.entitlements; sourceTree = "<group>"; };
+		998EEA6A67E542AB2088E8D3 /* ScaleCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleCentral.swift; sourceTree = "<group>"; };
+		C3061E75700AD499C6D276C4 /* Export.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Export.swift; sourceTree = "<group>"; };
+		D46FB7FA98AA2B3BD343FB23 /* DeviceCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceCore.swift; sourceTree = "<group>"; };
+		EB942A421DC3EE354F8866B8 /* scalekit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = scalekit; path = ../scalekit; sourceTree = SOURCE_ROOT; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		3E994D785684815BF70363D9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				387F7255776396CA745DDE37 /* ScaleKit in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		42E024B1E47BCCB6EB1A5968 /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				EB942A421DC3EE354F8866B8 /* scalekit */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		A305BAD13F881D48AE1109DE = {
+			isa = PBXGroup;
+			children = (
+				42E024B1E47BCCB6EB1A5968 /* Packages */,
+				C6526862E29362178285317C /* Yantra */,
+				CBE6CC25F8DF267859128816 /* YantraTests */,
+				AD145EA77A784DF205959C90 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AD145EA77A784DF205959C90 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1E0B152037C9C48C59884EA8 /* Yantra.app */,
+				7DDFCEE96EB7C620C9C1F42E /* YantraTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C6526862E29362178285317C /* Yantra */ = {
+			isa = PBXGroup;
+			children = (
+				D46FB7FA98AA2B3BD343FB23 /* DeviceCore.swift */,
+				1213AD115220626727ADF7F1 /* DevicesHubView.swift */,
+				C3061E75700AD499C6D276C4 /* Export.swift */,
+				23A94047CF87A064244D5995 /* Info.plist */,
+				61A077E6724728D5615A22BB /* MainTabView.swift */,
+				44601735C06F8C0247172464 /* Models.swift */,
+				998EEA6A67E542AB2088E8D3 /* ScaleCentral.swift */,
+				6BFF6A6DBE1BA46D72EE678F /* Views.swift */,
+				8B3C48A161D199772C55E9B3 /* Yantra.entitlements */,
+				597C28F131C641DC2096CA18 /* YantraApp.swift */,
+			);
+			path = Yantra;
+			sourceTree = "<group>";
+		};
+		CBE6CC25F8DF267859128816 /* YantraTests */ = {
+			isa = PBXGroup;
+			children = (
+				33189F39AE7C6957F88C2D05 /* ModelTests.swift */,
+			);
+			path = YantraTests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		0A23ED4B223CF5BB70089988 /* Yantra */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 62858061F4BCB0D972F33180 /* Build configuration list for PBXNativeTarget "Yantra" */;
+			buildPhases = (
+				01295F06A6686D37C02C899E /* Sources */,
+				3E994D785684815BF70363D9 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Yantra;
+			packageProductDependencies = (
+				E3F7937DCFF0422F4666F6A9 /* ScaleKit */,
+			);
+			productName = Yantra;
+			productReference = 1E0B152037C9C48C59884EA8 /* Yantra.app */;
+			productType = "com.apple.product-type.application";
+		};
+		1410A4400E9629CB1C29D875 /* YantraTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DE010EF65CB2688BD632CCE7 /* Build configuration list for PBXNativeTarget "YantraTests" */;
+			buildPhases = (
+				BE5A956D37C9B160B3AEF679 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DB4F536DEF952E19162514FB /* PBXTargetDependency */,
+			);
+			name = YantraTests;
+			packageProductDependencies = (
+			);
+			productName = YantraTests;
+			productReference = 7DDFCEE96EB7C620C9C1F42E /* YantraTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		1556795679ACC8882299E742 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = B5ED37E80608BA9CAF7FD563 /* Build configuration list for PBXProject "Yantra" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = A305BAD13F881D48AE1109DE;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				A4A8EA07BDD62DA5FDD3C4B2 /* XCLocalSwiftPackageReference "../scalekit" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AD145EA77A784DF205959C90 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				0A23ED4B223CF5BB70089988 /* Yantra */,
+				1410A4400E9629CB1C29D875 /* YantraTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		01295F06A6686D37C02C899E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				8888070E95FD0811443653F6 /* DeviceCore.swift in Sources */,
+				62A1737DD79B93CF9EC6799E /* DevicesHubView.swift in Sources */,
+				E28B09296359CFB9E48C4675 /* Export.swift in Sources */,
+				3203598B59E19361870E5CFF /* MainTabView.swift in Sources */,
+				A5D9BC8E0DA8F543D717E770 /* Models.swift in Sources */,
+				A61C4A53C5C47F342C6BA30C /* ScaleCentral.swift in Sources */,
+				EAE43B31F4475EC67E0725EA /* Views.swift in Sources */,
+				3429633A6BCA1704FCA2A9C8 /* YantraApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BE5A956D37C9B160B3AEF679 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CE21ACF9BF3A2309AB8590BA /* ModelTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		DB4F536DEF952E19162514FB /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 0A23ED4B223CF5BB70089988 /* Yantra */;
+			targetProxy = 9D099F7A821D80D1585E1949 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		0AAB0BBF8473A6130C830273 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.firefly.YantraTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Yantra.app/Yantra";
+			};
+			name = Release;
+		};
+		204AD751C778F825F73CC8B0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.firefly.YantraTests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Yantra.app/Yantra";
+			};
+			name = Debug;
+		};
+		528BC86611C4D482185F4048 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Yantra/Yantra.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Yantra/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.firefly.Yantra;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		8B52E652889ED4AA8C072C00 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+		EE1EED1BB4C957EF5E08C460 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Yantra/Yantra.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Yantra/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = app.firefly.Yantra;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		F45636490E95598F32BD5AFB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		62858061F4BCB0D972F33180 /* Build configuration list for PBXNativeTarget "Yantra" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				528BC86611C4D482185F4048 /* Debug */,
+				EE1EED1BB4C957EF5E08C460 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B5ED37E80608BA9CAF7FD563 /* Build configuration list for PBXProject "Yantra" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F45636490E95598F32BD5AFB /* Debug */,
+				8B52E652889ED4AA8C072C00 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		DE010EF65CB2688BD632CCE7 /* Build configuration list for PBXNativeTarget "YantraTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				204AD751C778F825F73CC8B0 /* Debug */,
+				0AAB0BBF8473A6130C830273 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		A4A8EA07BDD62DA5FDD3C4B2 /* XCLocalSwiftPackageReference "../scalekit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../scalekit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		E3F7937DCFF0422F4666F6A9 /* ScaleKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ScaleKit;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 1556795679ACC8882299E742 /* Project object */;
+}

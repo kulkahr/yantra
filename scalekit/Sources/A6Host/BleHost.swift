@@ -3,7 +3,7 @@ import CoreBluetooth
 import ScaleKit
 
 // GATTPlus (extended UUIDs incl. A620/1531 + 180a info) now lives in ScaleKit
-// so the Firefly iOS app shares the same constants.
+// so the Yantra iOS app shares the same constants.
 
 // MARK: - Output sink
 

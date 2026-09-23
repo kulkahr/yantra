@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct FireflyApp: App {
+struct YantraApp: App {
     var body: some Scene {
         WindowGroup {
             // SRD-009: the Devices hub is the app root; the scale's feature

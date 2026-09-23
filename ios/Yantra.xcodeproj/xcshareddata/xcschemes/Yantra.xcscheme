@@ -15,10 +15,10 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C71E9AFEE04A0936A7C43A16"
-               BuildableName = "Firefly.app"
-               BlueprintName = "Firefly"
-               ReferencedContainer = "container:Firefly.xcodeproj">
+               BlueprintIdentifier = "0A23ED4B223CF5BB70089988"
+               BuildableName = "Yantra.app"
+               BlueprintName = "Yantra"
+               ReferencedContainer = "container:Yantra.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
          <BuildActionEntry
@@ -29,10 +29,10 @@
             buildForAnalyzing = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C1C4A8784E8870CCA1486201"
-               BuildableName = "FireflyTests.xctest"
-               BlueprintName = "FireflyTests"
-               ReferencedContainer = "container:Firefly.xcodeproj">
+               BlueprintIdentifier = "1410A4400E9629CB1C29D875"
+               BuildableName = "YantraTests.xctest"
+               BlueprintName = "YantraTests"
+               ReferencedContainer = "container:Yantra.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -46,10 +46,10 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C71E9AFEE04A0936A7C43A16"
-            BuildableName = "Firefly.app"
-            BlueprintName = "Firefly"
-            ReferencedContainer = "container:Firefly.xcodeproj">
+            BlueprintIdentifier = "0A23ED4B223CF5BB70089988"
+            BuildableName = "Yantra.app"
+            BlueprintName = "Yantra"
+            ReferencedContainer = "container:Yantra.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
       <Testables>
@@ -58,10 +58,10 @@
             parallelizable = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "C1C4A8784E8870CCA1486201"
-               BuildableName = "FireflyTests.xctest"
-               BlueprintName = "FireflyTests"
-               ReferencedContainer = "container:Firefly.xcodeproj">
+               BlueprintIdentifier = "1410A4400E9629CB1C29D875"
+               BuildableName = "YantraTests.xctest"
+               BlueprintName = "YantraTests"
+               ReferencedContainer = "container:Yantra.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -82,10 +82,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C71E9AFEE04A0936A7C43A16"
-            BuildableName = "Firefly.app"
-            BlueprintName = "Firefly"
-            ReferencedContainer = "container:Firefly.xcodeproj">
+            BlueprintIdentifier = "0A23ED4B223CF5BB70089988"
+            BuildableName = "Yantra.app"
+            BlueprintName = "Yantra"
+            ReferencedContainer = "container:Yantra.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
       <CommandLineArguments>
@@ -101,10 +101,10 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "C71E9AFEE04A0936A7C43A16"
-            BuildableName = "Firefly.app"
-            BlueprintName = "Firefly"
-            ReferencedContainer = "container:Firefly.xcodeproj">
+            BlueprintIdentifier = "0A23ED4B223CF5BB70089988"
+            BuildableName = "Yantra.app"
+            BlueprintName = "Yantra"
+            ReferencedContainer = "container:Yantra.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

@@ -13,7 +13,7 @@ struct PairedDevice: Codable, Identifiable, Equatable {
     var addedAt: Date
 }
 
-/// Persistent device inventory (SRD-009 §2.3) — `Application Support/Firefly/devices.json`.
+/// Persistent device inventory (SRD-009 §2.3) — `Application Support/Yantra/devices.json`.
 @MainActor
 final class DeviceStore: ObservableObject {
     static let shared = DeviceStore()
@@ -25,7 +25,7 @@ final class DeviceStore: ObservableObject {
     init(directory: URL? = nil) {
         let dir = directory ?? FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Firefly", isDirectory: true)
+            .appendingPathComponent("Yantra", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         url = dir.appendingPathComponent("devices.json")
         if let data = try? Data(contentsOf: url),

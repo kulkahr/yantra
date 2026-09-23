@@ -1,4 +1,4 @@
-# Firefly — Feasibility, Blockers & Unknowns (re-verified 2026-09-20)
+# Yantra — Feasibility, Blockers & Unknowns (re-verified 2026-09-20)
 
 Verdict: **FEASIBLE — no hard blockers.** Every critical protocol fact has been confirmed twice (decompiled source + live BLE capture). Three residual unknowns remain, each with a bounded mitigation and a concrete experiment.
 
@@ -21,7 +21,7 @@ Verdict: **FEASIBLE — no hard blockers.** Every critical protocol fact has bee
 | U1 | ~~Whether the scale enforces an app-side *challenge secret*~~ **FULLY RESOLVED (2026-09-21):** auth is secret-free — challenge code is all-zeros, app echoes it. The **pairing introduction is solved too**: the scale gates its challenge on the peer subscribing all four notifiable characteristics (`A620` indicate + `A621` + `A625` + `1531`); with those CCCDs set, the Mac registered and **bound itself** (auth mode 1 → `0x0003` → `0x0004=1`), no cloud, no secret, no BLE bonding. deviceId = lowercase MAC. |
 | U2 | ~~Exact live-weight stream frame type~~ **RESOLVED (2026-09-21, Mac live session):** there is **no separate live frame** — weigh-ins stream as real-time `0x4802` records (obfuscated `0x1011` on the wire; remain counter ticks down to 0, impedance updates during the body scan). Records flow only after the client sends `0x4801 [slot][1]` (start-measurement). `0x00E9` never appears on this firmware. |
 | U3 | Body-fat formula constants (Lifesense S11 set) | UI parity for computed metrics | Raw weight+impedance are unaffected. Formula approximated first, tuned in bring-up vs official app readings (±0.1 tolerance). Optionally capture official app traffic on Android via HCI snoop to extract exact math. |
-| U4 | Multi-user slot contention with realme Link (same physical scale bound by both apps) | If user reinstalls official app, slot collisions possible | Documented behavior: scale keeps 5 slots; Firefly uses its own slot; SRD-002 FR-3 unbind path available. |
+| U4 | Multi-user slot contention with realme Link (same physical scale bound by both apps) | If user reinstalls official app, slot collisions possible | Documented behavior: scale keeps 5 slots; Yantra uses its own slot; SRD-002 FR-3 unbind path available. |
 | U5 | Firmware variance across LS213-B units (XOR gate threshold "1.4.0.25") | Low — code supports both variants; live unit answers per ≥1.4.0.25 path | Codec implements both; feature-detect via `180a:2a26` firmware read. |
 
 ## 3. Blockers
@@ -30,7 +30,7 @@ None identified. The only hard dependency is **physical access to the scale for 
 
 ## 4. Legal/ethical re-check
 
-- Interop research for personal use of one's own device: decompiled artifacts stay in this repo, are not redistributed (README note), and Firefly ships no realme/Lifesense code — only protocol behavior re-implemented from observation.
+- Interop research for personal use of one's own device: decompiled artifacts stay in this repo, are not redistributed (README note), and Yantra ships no realme/Lifesense code — only protocol behavior re-implemented from observation.
 - No DMCA-relevant circumvention: no encryption is broken; the "obfuscation" is a documented XOR with a public identifier, and the auth exchange is echoed device-provided data.
 
 ## 5. Decision

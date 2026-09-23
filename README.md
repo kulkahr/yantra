@@ -1,6 +1,6 @@
 # realme-scale-re — Realme Smart Scale Protocol Research
 
-Reverse-engineering workspace for the **realme Link** Android app (v5.5.514.11421, versionCode 530121), pulled from a Samsung Galaxy S23 FE (SM-S711B) on 2026-09-20, with the goal of building a **privacy-friendly app ("Firefly") that connects to the realme Smart Scale and reads weight data directly** — no realme cloud, no account.
+Reverse-engineering workspace for the **realme Link** Android app (v5.5.514.11421, versionCode 530121), pulled from a Samsung Galaxy S23 FE (SM-S711B) on 2026-09-20, with the goal of building a **privacy-friendly app ("Yantra") that connects to the realme Smart Scale and reads weight data directly** — no realme cloud, no account.
 
 ## Key finding
 
@@ -17,7 +17,7 @@ Reverse-engineering workspace for the **realme Link** Android app (v5.5.514.1142
 | `analysis/` | Protocol + app-architecture + iOS-compatibility analysis |
 | `analysis/tools/` | Live BLE scanner (Swift), Python codec truth model (`golden_gen.py`) + golden vectors |
 | `scalekit/` | **ScaleKit** — Swift package implementing the A6 protocol (codec, commands, parsers, state machines, BodyComposer), 40/40 tests green |
-| `ios/` | **Firefly** — SwiftUI iOS app (Phase 2/3): scan/bind (SRD-002), live weigh-ins (SRD-003), history + charts (SRD-004), profile + body composition (SRD-005/006), CSV/HealthKit export |
+| `ios/` | **Yantra** — SwiftUI iOS app (Phase 2/3): scan/bind (SRD-002), live weigh-ins (SRD-003), history + charts (SRD-004), profile + body composition (SRD-005/006), CSV/HealthKit export |
 | `docs/` | SRDs (one per feature), TDD, diagrams, feasibility, roadmap |
 
 ## Documents

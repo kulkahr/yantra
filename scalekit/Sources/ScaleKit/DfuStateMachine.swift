@@ -19,7 +19,7 @@ import Foundation
 ///
 /// Repeat per bin (BLE → SOC → WIFI) until the queue is empty.
 /// This machine speaks the same `LinkAction`/`LinkEvent` dialect as
-/// `PairStateMachine`/`SessionStateMachine`, so every host (a6host, Firefly)
+/// `PairStateMachine`/`SessionStateMachine`, so every host (a6host, Yantra)
 /// can drive it with the plumbing it already has.
 public struct DfuStateMachine {
     public enum Phase: Equatable {
