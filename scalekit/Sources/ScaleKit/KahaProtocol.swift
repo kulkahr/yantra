@@ -239,12 +239,20 @@ public enum KahaProtocol {
                           stress: Int(payload[4]))
     }
 
-    /// Live steps push `06 81`: steps u32 LE; 12-byte payload variant adds
-    /// float32 distance (meters) + float32 calories (`LiveStepsRes`).
+    /// Live steps push `06 81` (`LiveStepsRes` parses the FULL frame:
+    /// split[4..7] = steps u32 LE → payload[0..3]; split[8..11] = float32
+    /// distance meters → payload[4..7]; split[12..15] = float32 calories →
+    /// payload[8..11], i.e. the 12-byte-payload variant).
     public struct LiveSteps: Equatable {
         public var steps: Int
         public var meters: Double?
         public var calories: Double?
+
+        public init(steps: Int, meters: Double? = nil, calories: Double? = nil) {
+            self.steps = steps
+            self.meters = meters
+            self.calories = calories
+        }
     }
 
     public static func decodeLiveSteps(_ payload: [UInt8]) -> LiveSteps? {
@@ -283,15 +291,36 @@ public enum KahaProtocol {
         public var diastolic: Int
         public var systolic: Int
         public var respiratoryRate: Int
+
+        /// Watch marks empty slots with 0xFF (or 0) — not real readings
+        /// (HrBpDataRes maps the −1 byte to 0 and Crest drops empty hours).
+        public var isValid: Bool {
+            heartRate > 0 && heartRate != 0xFF
+                && diastolic != 0xFF && systolic != 0xFF
+        }
     }
 
-    /// Decodes a history day: samples-per-hour = (60/interval)×4 bytes per hour,
-    /// hour 0 = `startHour`. `interval` is the minutes-per-sample setting.
+    /// Decodes a history day's RAW sample stream into `(date, sample)` pairs.
+    ///
+    /// `samplesPerHour` is the watch's automatic-HR cadence for the day — the
+    /// firmware streams at its own configured rate, NOT the requested one
+    /// (#45: a 5-min cadence day streams 288 × 4 = 1152 bytes regardless of
+    /// the request), so derive it from the payload: `count / 24`, clamped to
+    /// the 60-min setting. Hour 0 = `startHour`.
     public static func decodeHRHistory(_ payload: [UInt8], intervalMinutes: Int,
                                        startHour: Int, day: Int,
                                        timeZone: TimeZone = .current) -> [(date: Date, sample: HRSample)] {
-        let perHour = intervalMinutes > 0 ? (60 / intervalMinutes) * 4 : 0
-        guard perHour > 0 else { return [] }
+        guard payload.count >= 4 else { return [] }
+        let sampleCount = payload.count / 4
+        // Watch-driven cadence: infer from the stream, fall back to the
+        // configured interval when the day is partial (today before midnight).
+        var samplesPerHour = max(1, sampleCount / 24)
+        if sampleCount < 24 {
+            samplesPerHour = intervalMinutes > 0 ? max(1, 60 / intervalMinutes) : 1
+        }
+        samplesPerHour = max(samplesPerHour, 1)
+        let minutesPerSample = max(1, 60 / samplesPerHour)
+
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
         guard let base = cal.date(byAdding: .day, value: -day, to: Date()) else { return [] }
@@ -301,15 +330,26 @@ public enum KahaProtocol {
         while offset + 4 <= payload.count {
             let sample = HRSample(heartRate: Int(payload[offset]), diastolic: Int(payload[offset + 1]),
                                   systolic: Int(payload[offset + 2]), respiratoryRate: Int(payload[offset + 3]))
-            let sampleIndex = offset / 4
-            let hour = startHour + sampleIndex / perHour
-            let minute = (sampleIndex % perHour) * intervalMinutes
-            if let date = cal.date(byAdding: .minute, value: hour * 60 + minute, to: dayStart) {
-                out.append((date, sample))
+            if sample.isValid {
+                let sampleIndex = offset / 4
+                let minuteOfDay = startHour * 60 + sampleIndex * minutesPerSample
+                if let date = cal.date(byAdding: .minute, value: minuteOfDay, to: dayStart) {
+                    out.append((date, sample))
+                }
             }
             offset += 4
         }
         return out
+    }
+
+    /// Today's steps response `01 00` (`TodaysStepsDataRes` over
+    /// `GET_WALK_VALUE = {1, 0, 5, 0, 0}`): u16 LE at payload[1..2]
+    /// (decompiled reads split[5] | split[6]<<8 of the full frame; split[7]
+    /// and split[8] carry distance/calories halves it ignores). Arrives only
+    /// while the steps request is in flight — the queue guarantees that.
+    public static func decodeTodaysSteps(_ payload: [UInt8]) -> Int? {
+        guard payload.count >= 3 else { return nil }
+        return Int(payload[1]) | (Int(payload[2]) << 8)
     }
 
     // MARK: - Sleep history (SleepDataRes layout)
@@ -393,7 +433,8 @@ public enum KahaProtocol {
 
     /// Decodes periodic SpO2 history (`0x01 0x26` response): one byte per
     /// 5-minute slot from `startHour`; `0xFF` = no reading (Spo2PeriodicDataRes
-    /// filters `-1` bytes). `day` = days ago for the sample's date.
+    /// filters `-1` bytes, and `0` is also not a plausible SpO₂ reading).
+    /// `day` = days ago for the sample's date.
     public static func decodeSpo2History(_ payload: [UInt8], startHour: Int, day: Int,
                                          timeZone: TimeZone = .current) -> [SpO2Sample] {
         var cal = Calendar(identifier: .gregorian)
@@ -401,7 +442,7 @@ public enum KahaProtocol {
         guard let base = cal.date(byAdding: .day, value: -day, to: Date()) else { return [] }
         let dayStart = cal.startOfDay(for: base)
         var out: [SpO2Sample] = []
-        for (i, b) in payload.enumerated() where b != 0xFF {
+        for (i, b) in payload.enumerated() where b != 0xFF && b != 0 {
             let minute = startHour * 60 + i * 5
             if let date = cal.date(byAdding: .minute, value: minute, to: dayStart) {
                 out.append(SpO2Sample(date: date, percent: Int(b)))

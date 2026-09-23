@@ -109,7 +109,8 @@ final class KahaProtocolTests: XCTestCase {
     // MARK: - HR history (HrBpDataRes layout)
 
     func testHRHistoryDecode() {
-        // interval 60 min → 4 bytes per hour; day 0 = today, startHour 0.
+        // Partial-day stream (3 samples): cadence falls back to the configured
+        // interval — 60 min → 4 bytes per hour; day 0 = today, startHour 0.
         var payload: [UInt8] = []
         // 3 hours: 72 bpm, 70, 75
         for hr in [72, 70, 75] {
@@ -128,13 +129,58 @@ final class KahaProtocolTests: XCTestCase {
         cal.timeZone = .current
         let hour0 = cal.dateComponents([.hour], from: samples[0].date).hour!
         let hour2 = cal.dateComponents([.hour], from: samples[2].date).hour!
-        XCTAssertEqual(hour0, (cal.component(.hour, from: Date()) + 24) % 24 - 0 >= 0 ? hour0 : hour0)
         XCTAssertEqual(hour2, (hour0 + 2) % 24)
     }
 
-    func testHRHistoryZeroIntervalReturnsEmpty() {
-        XCTAssertTrue(KahaProtocol.decodeHRHistory([1, 2, 3, 4], intervalMinutes: 0,
-                                                   startHour: 0, day: 0).isEmpty)
+    func testHRHistoryFullDayInfersWatchCadence() {
+        // #45: a 5-min-cadence full day streams 288 samples = 1152 bytes
+        // regardless of the requested interval — the decoder must infer 12
+        // samples/hour from the payload size, not trust the request.
+        var payload: [UInt8] = []
+        for i in 0..<288 {
+            payload.append(UInt8(60 + (i % 40)))  // hr
+            payload.append(80); payload.append(120); payload.append(18)
+        }
+        let samples = KahaProtocol.decodeHRHistory(payload, intervalMinutes: 60,
+                                                   startHour: 0, day: 0)
+        XCTAssertEqual(samples.count, 288)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        // Sample 12 must land at 01:00 (12 × 5 min).
+        let comps = cal.dateComponents([.hour, .minute], from: samples[12].date)
+        XCTAssertEqual(comps.hour, 1)
+        XCTAssertEqual(comps.minute, 0)
+        // Sample 287 must land at 23:55.
+        let last = cal.dateComponents([.hour, .minute], from: samples[287].date)
+        XCTAssertEqual(last.hour, 23)
+        XCTAssertEqual(last.minute, 55)
+    }
+
+    func testHRHistorySkipsInvalidSlots() {
+        // 0xFF (and 0) HR bytes mark empty slots — not real readings.
+        let payload: [UInt8] = [0xFF, 80, 120, 18,   // invalid slot
+                                0, 80, 120, 18,      // invalid slot
+                                75, 80, 120, 18]     // valid
+        let samples = KahaProtocol.decodeHRHistory(payload, intervalMinutes: 60,
+                                                   startHour: 0, day: 0)
+        XCTAssertEqual(samples.count, 1)
+        XCTAssertEqual(samples[0].sample.heartRate, 75)
+    }
+
+    func testHRHistoryPartialDayZeroIntervalAssumesHourly() {
+        // interval 0 (unknown) with a partial stream: assume 1 sample/hour.
+        let samples = KahaProtocol.decodeHRHistory([72, 80, 120, 18,
+                                                    70, 80, 120, 18],
+                                                   intervalMinutes: 0,
+                                                   startHour: 0, day: 0)
+        XCTAssertEqual(samples.count, 2)
+    }
+
+    func testTodaysStepsDecode() {
+        // TodaysStepsDataRes: u16 LE at payload[1..2] (frame bytes 5..6).
+        XCTAssertEqual(KahaProtocol.decodeTodaysSteps([0x00, 0x88, 0x56]), 22152)
+        XCTAssertEqual(KahaProtocol.decodeTodaysSteps([0x00, 0x10, 0x0E]), 3600)
+        XCTAssertNil(KahaProtocol.decodeTodaysSteps([0x00, 0x10]))
     }
 
     // MARK: - Sleep history (SleepDataRes layout)
@@ -266,15 +312,15 @@ final class KahaProtocolTests: XCTestCase {
     }
 
     func testSpo2HistoryDecodeSkipsInvalid() {
-        // 3 slots: 95, 0xFF (invalid), 97 → 2 samples.
-        let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 97], startHour: 8, day: 0)
+        // 4 slots: 95, 0xFF (invalid), 0 (implausible), 97 → 2 samples.
+        let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 0, 97], startHour: 8, day: 0)
         XCTAssertEqual(samples.count, 2)
         XCTAssertEqual(samples[0].percent, 95)
         XCTAssertEqual(samples[1].percent, 97)
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = .current
         let hour = cal.component(.hour, from: samples[1].date)
-        XCTAssertEqual(hour, 8, "second slot is 5 min past the 08:00 start")
+        XCTAssertEqual(hour, 8, "fourth slot is 15 min past the 08:00 start")
     }
 
     func testSpo2HistoryDayOffset() {

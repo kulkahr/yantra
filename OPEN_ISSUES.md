@@ -562,3 +562,41 @@ persisted all along). Now:
   state (next to "Scan again").
 - Cache-miss falls back to the #37 name-filtered auto-pair rescan, so a rebooted
   watch still reconnects without a manual scan.
+
+## 44. SpO₂ history shows only 0% records; live HR "huge/zero" values; steps always 0 — FIXED ✅
+
+Three decoders were reading the wrong bytes (verified against the decompiled
+layouts after a live `cmd 0x0D, 1152 bytes` stream log exposed them):
+
+- **Live steps** (`LiveStepsRes`): the decompiled parser passes the FULL frame
+  to the response class, so total steps = u32 LE at frame bytes 4..7 =
+  **payload[0..3]** — the original offsets were correct, and a false
+  "packet-counter" prefix theory briefly broke them; restored and pinned with
+  tests. (Steps were 0 because the watch does not push them on connect:
+  Crest explicitly sends `GET_WALK_VALUE {01 00 05 00 00}`.)
+- **Today's steps**: new `KahaProtocol.decodeTodaysSteps` — u16 LE at
+  payload[1..2] (`TodaysStepsDataRes` reads split[5]|split[6]<<8 of the full
+  frame). The request is queued right after the connect handshake (with a
+  `.steps` in-flight ack) and the value persists into `WatchStore`; the
+  `0x0D`-headered 1152-byte streams previously logged as "no decoder" are
+  history-style replies that the same ack now consumes.
+- **SpO₂ history**: `Spo2PeriodicDataRes` filters `0xFF`; `0` is equally a
+  no-reading slot, so both are skipped — no more 0% records.
+
+## 45. HR history had huge/zero values (1152-byte day streams) — FIXED ✅
+
+The 1152-byte stream = 288 samples = 24 h × 5-min cadence: the firmware
+streams at **its own automatic-HR rate**, not the interval the app requests
+(`HrBpDataRes` derives `timeInterval = (60/requested) × 4` bytes/hour but the
+observed stream proves the watch wins). Fixes:
+
+- `decodeHRHistory` infers samples-per-hour from the payload (`count / 24`),
+  falling back to the configured interval for partial-day streams, so
+  5-min-cadence days no longer get hourly-mapped (which produced the "huge"
+  values as dbp/sbp bytes were read as HR at wrong slots).
+- `0xFF` (and `0`) HR slots are skipped — the watch's empty-slot marker
+  (`HrBpDataRes` maps −1 → 0; Crest drops empty hours).
+- The bogus `setAutoHRInterval(60)` pre-command was removed: `01 02 05 00`
+  **is** the HR-history cmd id (`HISTORY_DATA_AUTOMATIC_HR_BP_INTERVAL`), and
+  interval writes use `{01 02 05 00 <minutes>}` — sending it before a history
+  request just collided with the same command slot.

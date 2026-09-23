@@ -1,5 +1,5 @@
 import UIKit
-import AVFoundation
+@preconcurrency import AVFoundation
 import AudioToolbox
 import CoreHaptics
 

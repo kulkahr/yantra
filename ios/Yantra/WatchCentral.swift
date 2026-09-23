@@ -106,7 +106,7 @@ final class WatchCentral: NSObject, ObservableObject {
     /// What to do when the in-flight command's response arrives. Responses
     /// route by the in-flight command (decompiled `commandObject` parity) —
     /// history stream headers do NOT echo the request cmd.
-    private enum AckKind {
+    private enum AckKind: Equatable {
         case none
         /// `0x7F` history stream → decoder by kind.
         case history(HistoryKind)
@@ -116,6 +116,9 @@ final class WatchCentral: NSObject, ObservableObject {
         case sportEnd
         /// Workout-day summary `81 23`; carries the daysAgo for the record id.
         case workoutSummary(day: Int)
+        /// Today's steps `01 00` (GET_WALK_VALUE) — also matches the stream
+        /// header cmd 0x0D the watch uses for this class of history replies.
+        case steps
     }
     private enum HistoryKind: Equatable {
         case hr(day: Int)
@@ -280,10 +283,12 @@ final class WatchCentral: NSObject, ObservableObject {
 
     /// Requests one day of HR/BP history (day = 0 → today). The response
     /// streams back as `0x7F` multipackets routed by the in-flight command.
+    /// NOTE: no interval pre-command — the firmware streams at its own
+    /// automatic-HR cadence (#45: the interval byte set via `01 02 05 00`
+    /// would also collide with the history cmd id).
     func loadHRHistory(day: Int) {
         hrDay = day
         hrDated = []
-        enqueue(KahaProtocol.setAutoHRInterval(minutes: 60), label: "auto-HR 60 min")
         enqueue(KahaProtocol.requestHRHistory(day: day, startHour: 0, endHour: 23),
                 label: "HR history day \(day)", ack: .history(.hr(day: day)))
     }
@@ -410,6 +415,11 @@ final class WatchCentral: NSObject, ObservableObject {
                 label: "set phone type")
         // Resync the watch clock to the phone (#20).
         enqueue(KahaProtocol.setDeviceTime(from: Date()), label: "sync clock")
+        // Today's steps — the watch does NOT push them on connect; Crest asks
+        // explicitly (GET_WALK_VALUE `01 00 05 00 00`, #44).
+        enqueue(KahaProtocol.frame(classId: KahaProtocol.ClassId.fitness, cmdId: 0x00,
+                                   payload: [0x00]),
+                label: "today's steps", ack: .steps)
         handshakeDone = true
         stage = .live
         appendLog("watch live — handshake queued (7 commands)")
@@ -446,6 +456,17 @@ final class WatchCentral: NSObject, ObservableObject {
                 handleWatchEvent(event)
             }
             return   // events never complete queued commands
+
+        // --- Today's steps response (response class 0x81, cmd 0x00) ---
+        // Decompiled parser only accepts it while a TodaysStepsDataReq is in
+        // flight; the queue gives us the same guarantee (#44).
+        case (KahaProtocol.ClassId.responseFitness, 0x00):
+            if commandInFlight?.ack == .steps, let steps = KahaProtocol.decodeTodaysSteps(frame.payload) {
+                liveSteps = KahaProtocol.LiveSteps(steps: steps, meters: liveSteps?.meters,
+                                                   calories: liveSteps?.calories)
+                persistLiveSteps()
+                appendLog("today's steps: \(steps)")
+            }
 
         // --- Sport session acks (response class 0x81) ---
         case (KahaProtocol.ClassId.responseFitness, KahaProtocol.FitnessCmd.currentSportMode):
@@ -704,6 +725,20 @@ final class WatchCentral: NSObject, ObservableObject {
                     workoutDays.insert(d, at: 0)
                 }
                 appendLog("workout day -\(d.id): \(d.steps) steps · \(Int(d.distanceMeters)) m · \(Int(d.calories)) kcal")
+            }
+            completeInFlight()
+        case .steps:
+            // TodaysStepsDataRes — u32 LE at payload bytes 5..8. Some
+            // firmware revisions also answer with a 0x0D-headered stream
+            // (seen live: `cmd 0x0D, 1152 bytes`), so this ack catches both.
+            if let steps = KahaProtocol.decodeTodaysSteps(data) {
+                let live = KahaProtocol.LiveSteps(steps: steps, meters: liveSteps?.meters,
+                                                  calories: liveSteps?.calories)
+                liveSteps = live
+                persistLiveSteps()
+                appendLog("today's steps: \(steps)")
+            } else {
+                appendLog("today's steps: undecodable payload (\(data.count) B: \(Array(data.prefix(12)).hexString))")
             }
             completeInFlight()
         default:
