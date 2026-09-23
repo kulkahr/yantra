@@ -118,7 +118,9 @@ final class WatchCentral: NSObject, ObservableObject {
         guard central.state == .poweredOn else { return }
         scheduleScanTimeout()
         // Nordic UART service filter — Storm Call 3 exposes it.
-        central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
+        // No service filter (#38): the Realtek/KaHa watch does not advertise the
+        // Nordic UART UUID — the official app scans by name only.
+        central.scanForPeripherals(withServices: nil, options: nil)
     }
 
     func stopScan() {
@@ -144,6 +146,7 @@ final class WatchCentral: NSObject, ObservableObject {
     /// (DeviceStore) — this only manages the link.
     func pair(_ watch: DiscoveredWatch) {
         pendingPair = watch.id
+        registerInInventory(peripheralId: watch.id, name: watch.name)
         resetLink()
         if let p = central.retrievePeripherals(withIdentifiers: [watch.id]).first {
             peripheral = p
@@ -188,7 +191,9 @@ final class WatchCentral: NSObject, ObservableObject {
         stage = .scanning
         guard central.state == .poweredOn else { return }
         scheduleScanTimeout()
-        central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
+        // No service filter (#38): the Realtek/KaHa watch does not advertise the
+        // Nordic UART UUID — the official app scans by name only.
+        central.scanForPeripherals(withServices: nil, options: nil)
     }
 
     /// Name-filter scan → pair first matching advertisement. `nil` filter
@@ -201,7 +206,9 @@ final class WatchCentral: NSObject, ObservableObject {
         stage = .scanning
         guard central.state == .poweredOn else { return }
         scheduleScanTimeout()
-        central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
+        // No service filter (#38): the Realtek/KaHa watch does not advertise the
+        // Nordic UART UUID — the official app scans by name only.
+        central.scanForPeripherals(withServices: nil, options: nil)
     }
 
     func disconnect() {
@@ -243,6 +250,17 @@ final class WatchCentral: NSObject, ObservableObject {
     }
 
     // MARK: - Internals
+
+    /// Issue #38: QR/scanner pairing must land in the persistent inventory,
+    /// otherwise the hub shows nothing and a restart drops the watch entirely.
+    /// Idempotent — also refreshes the stored name.
+    private func registerInInventory(peripheralId: UUID, name: String) {
+        Task { @MainActor in
+            DeviceStore.shared.upsert(PairedDevice(peripheralId: peripheralId,
+                                                   kind: .watch, name: name,
+                                                   addedAt: Date()))
+        }
+    }
 
     /// ScaleKit UUIDs are pure Foundation; CoreBluetooth wants CBUUID.
     private func cb(_ u: UUID) -> CBUUID { CBUUID(string: u.uuidString) }
@@ -589,7 +607,9 @@ extension WatchCentral: CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         guard central.state == .poweredOn, stage == .scanning else { return }
-        central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
+        // No service filter (#38): the Realtek/KaHa watch does not advertise the
+        // Nordic UART UUID — the official app scans by name only.
+        central.scanForPeripherals(withServices: nil, options: nil)
     }
 
     func centralManager(_ central: CBCentralManager,
@@ -603,7 +623,11 @@ extension WatchCentral: CBCentralManagerDelegate {
         // name starts with the filter, e.g. STORMCALL…). Normal scan: any
         // stormcall device.
         if let filter = connectTargetName {
-            guard upper.hasPrefix(filter) || filter.hasPrefix(upper) else { return }
+            // Prefix match either way, or a shared STORMCALL family match —
+            // covers retries where the stored name is generic ("Storm Call 3").
+            guard upper.hasPrefix(filter) || filter.hasPrefix(upper)
+                  || (upper.contains("STORMCALL") && filter.contains("STORMCALL"))
+            else { return }
         } else if !upper.contains("STORMCALL") {
             return
         }
@@ -617,6 +641,7 @@ extension WatchCentral: CBCentralManagerDelegate {
             resetLink()
             peripheral.delegate = self
             central.connect(peripheral)
+            registerInInventory(peripheralId: peripheral.identifier, name: n)
             stage = .connecting
         }
     }
