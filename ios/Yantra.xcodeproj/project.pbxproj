@@ -14,6 +14,7 @@
 		6A0100010000000000000001 /* WatchCentral.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0100020000000000000001 /* WatchCentral.swift */; };
 		6A0100030000000000000001 /* WatchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0100040000000000000001 /* WatchView.swift */; };
 		6A0100050000000000000001 /* WatchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0100060000000000000001 /* WatchStore.swift */; };
+		6A0100090000000000000001 /* WatchAssistants.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A01000A0000000000000001 /* WatchAssistants.swift */; };
 		6A0100070000000000000001 /* WatchQRScannerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0100080000000000000001 /* WatchQRScannerView.swift */; };
 		8888070E95FD0811443653F6 /* DeviceCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D46FB7FA98AA2B3BD343FB23 /* DeviceCore.swift */; };
 		A5D9BC8E0DA8F543D717E770 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44601735C06F8C0247172464 /* Models.swift */; };
@@ -45,6 +46,7 @@
 		6A0100020000000000000001 /* WatchCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchCentral.swift; sourceTree = "<group>"; };
 		6A0100040000000000000001 /* WatchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchView.swift; sourceTree = "<group>"; };
 		6A0100060000000000000001 /* WatchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchStore.swift; sourceTree = "<group>"; };
+		6A01000A0000000000000001 /* WatchAssistants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchAssistants.swift; sourceTree = "<group>"; };
 		6A0100080000000000000001 /* WatchQRScannerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchQRScannerView.swift; sourceTree = "<group>"; };
 		7DDFCEE96EB7C620C9C1F42E /* YantraTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = YantraTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8B3C48A161D199772C55E9B3 /* Yantra.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Yantra.entitlements; sourceTree = "<group>"; };
@@ -107,6 +109,7 @@
 				6A0100020000000000000001 /* WatchCentral.swift */,
 				6A0100040000000000000001 /* WatchView.swift */,
 				6A0100060000000000000001 /* WatchStore.swift */,
+				6A01000A0000000000000001 /* WatchAssistants.swift */,
 				6A0100080000000000000001 /* WatchQRScannerView.swift */,
 				8B3C48A161D199772C55E9B3 /* Yantra.entitlements */,
 				597C28F131C641DC2096CA18 /* YantraApp.swift */,
@@ -209,6 +212,7 @@
 				6A0100010000000000000001 /* WatchCentral.swift in Sources */,
 				6A0100030000000000000001 /* WatchView.swift in Sources */,
 				6A0100050000000000000001 /* WatchStore.swift in Sources */,
+				6A0100090000000000000001 /* WatchAssistants.swift in Sources */,
 				6A0100070000000000000001 /* WatchQRScannerView.swift in Sources */,
 				3429633A6BCA1704FCA2A9C8 /* YantraApp.swift in Sources */,
 			);
