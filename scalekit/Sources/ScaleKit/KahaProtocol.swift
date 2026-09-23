@@ -36,6 +36,15 @@ public enum KahaProtocol {
         public static let system: UInt8 = 0x06        // system control
         public static let live: UInt8 = 0x06          // live-data push class (same byte, response side)
         public static let multipacket: UInt8 = 0x7F   // response continuation header
+
+        /// RESPONSE class bytes (ProtocolParser dispatches on `bArr[0]`):
+        /// the watch answers with class = request class | 0x80 — 0x01→0x81
+        /// (sport/workout/history acks), 0x02→0x82 (watch-face lists),
+        /// 0x00→0x80 (info: name/firmware/time/battery). Watch-initiated
+        /// EVENT pushes (0x01 0x05 controls, 0x06 live data) keep the plain class.
+        public static let responseInfo: UInt8 = 0x80
+        public static let responseFitness: UInt8 = 0x81
+        public static let responseAlerts: UInt8 = 0x82
     }
 
     public enum InfoCmd {
@@ -198,6 +207,21 @@ public enum KahaProtocol {
     }
 
     // MARK: - Payload decoders
+
+    /// Latest-health response `80 0A` (`GetLatestHealthDataRes.getData`):
+    /// timestamp u32 LE seconds at payload[0..3], value u16 LE at payload[4..5].
+    public struct LatestHealth: Equatable {
+        public var secondsSinceEpoch: UInt32
+        public var value: Int
+    }
+
+    public static func decodeLatestHealth(_ payload: [UInt8]) -> LatestHealth? {
+        guard payload.count >= 6 else { return nil }
+        let ts = UInt32(payload[0]) | (UInt32(payload[1]) << 8)
+            | (UInt32(payload[2]) << 16) | (UInt32(payload[3]) << 24)
+        return LatestHealth(secondsSinceEpoch: ts,
+                            value: Int(payload[4]) | (Int(payload[5]) << 8))
+    }
 
     /// Live health push `06 80`: hr, dbp, sbp, rr, stress (`LiveHealthRes`).
     public struct LiveHealth: Equatable {
@@ -663,5 +687,55 @@ public enum KahaProtocol {
     /// Total-frame-length bytes (lo, hi) shared by hand-built frames.
     static func frameLength(total: Int) -> [UInt8] {
         [UInt8(total & 0xFF), UInt8((total >> 8) & 0xFF)]
+    }
+}
+
+// MARK: - Multipacket reassembly (ProtocolParser.f / case 0x7F parity)
+
+/// Reassembles `0x7F` multipacket history streams. Large responses (HR/sleep/
+/// SpO2 history) arrive as: a START packet `[0x7F, cmd, 0, 0, countLo, countHi,
+/// d0, d1, f, f, ts0…ts3, data…]` followed by `count-1` CONTINUATION packets
+/// `[0x7F, cmd, lenLo, lenHi, data…]`. The start packet's 8-byte payload
+/// header + 4-byte timestamp are skipped; continuation data starts at byte 4.
+public final class MultipacketAssembler {
+    private var packets: [[UInt8]] = []
+    private var totalPackets = 0
+
+    public init() {}
+
+    /// Clears partial stream state (call on reconnect).
+    public func reset() {
+        packets = []
+        totalPackets = 0
+    }
+
+    /// Feeds one raw notification; returns assembled `(cmd, DATA)` pairs —
+    /// usually `[]` while the stream is incomplete. The cmd byte comes from
+    /// the stream's start packet (mirrors the decompiled commandObject
+    /// routing, so parallel history streams can't cross wires). Plain
+    /// non-0x7F frames pass straight through with the 4-byte header stripped.
+    public func feed(_ raw: [UInt8]) -> [(cmd: UInt8, data: [UInt8])] {
+        guard raw.count >= 4 else { return [] }
+        guard raw[0] == 0x7F else {
+            return [(cmd: raw[1], data: Array(raw[4...]))]
+        }
+        let isStart = raw[2] == 0 && raw[3] == 0
+        if isStart {
+            // Decompiled f(): a zero length field starts a new stream; the
+            // expected packet count rides at bytes 4..5 (LE).
+            packets = [raw]
+            totalPackets = raw.count >= 6 ? Int(raw[4]) | (Int(raw[5]) << 8) : 0
+        } else {
+            packets.append(raw)
+        }
+        guard totalPackets > 0, packets.count == totalPackets, let head = packets.first else { return [] }
+        var data: [UInt8] = []
+        for (i, p) in packets.enumerated() {
+            let start = i == 0 ? 12 : 4
+            if p.count > start { data.append(contentsOf: p[start...]) }
+        }
+        packets = []
+        totalPackets = 0
+        return data.isEmpty ? [] : [(cmd: head[1], data: data)]
     }
 }

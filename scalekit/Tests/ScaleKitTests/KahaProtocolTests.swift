@@ -215,6 +215,56 @@ final class KahaProtocolTests: XCTestCase {
         XCTAssertNil(KahaProtocol.decodeSportAck([]))
     }
 
+    // MARK: - Response class mapping + multipacket reassembly (#34 root cause)
+
+    func testResponseClassConstants() {
+        // ProtocolParser dispatches on bArr[0]: response class = request | 0x80.
+        XCTAssertEqual(KahaProtocol.ClassId.responseFitness, 0x81)
+        XCTAssertEqual(KahaProtocol.ClassId.responseAlerts, 0x82)
+        XCTAssertEqual(KahaProtocol.ClassId.responseInfo, 0x80)
+    }
+
+    func testMultipacketStartPacketDetection() {
+        let asm = MultipacketAssembler()
+        // Start packet: 7F cmd 00 00 count=3 … (incomplete, no output yet).
+        let start: [UInt8] = [0x7F, 0x02, 0x00, 0x00, 0x03, 0x00, 0, 0, 0, 0, 0, 0, 0xAA]
+        XCTAssertEqual(asm.feed(start).count, 0)
+        // Continuation 1: 7F cmd len(=7) 00 data…
+        XCTAssertEqual(asm.feed([0x7F, 0x02, 0x07, 0x00, 0xBB]).count, 0)
+        // Final packet emits cmd + assembled data (skip 12-byte start header).
+        let out = asm.feed([0x7F, 0x02, 0x05, 0x00, 0xCC])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].cmd, 0x02)
+        XCTAssertEqual(out[0].data, [0xAA, 0xBB, 0xCC])
+    }
+
+    func testMultipacketRestartOnNewStart() {
+        let asm = MultipacketAssembler()
+        // Abandoned stream (count=5, only 1 packet) then a fresh 1-packet stream.
+        XCTAssertEqual(asm.feed([0x7F, 0x08, 0x00, 0x00, 0x05, 0x00, 0, 0, 0, 0, 0, 0, 0x01]).count, 0)
+        let out = asm.feed([0x7F, 0x26, 0x00, 0x00, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0xEE])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].cmd, 0x26)
+        XCTAssertEqual(out[0].data, [0xEE])
+    }
+
+    func testPlainFramePassthroughYieldsCmd() {
+        let asm = MultipacketAssembler()
+        // Plain ack 81 8B … payload — passes through as (cmd=0x8B, payload).
+        let out = asm.feed([0x81, 0x8B, 0x05, 0x00, 0x01])
+        XCTAssertEqual(out.count, 1)
+        XCTAssertEqual(out[0].cmd, 0x8B)
+        XCTAssertEqual(out[0].data, [0x01])
+    }
+
+    func testDecodeLatestHealth() {
+        // 80 0A response: timestamp u32 LE + value u16 LE.
+        let lh = KahaProtocol.decodeLatestHealth([0x10, 0x00, 0x00, 0x00, 0x63, 0x00])
+        XCTAssertEqual(lh?.value, 99)
+        XCTAssertEqual(lh?.secondsSinceEpoch, 16)
+        XCTAssertNil(KahaProtocol.decodeLatestHealth([1, 2, 3]))
+    }
+
     func testSpo2HistoryDecodeSkipsInvalid() {
         // 3 slots: 95, 0xFF (invalid), 97 → 2 samples.
         let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 97], startHour: 8, day: 0)
