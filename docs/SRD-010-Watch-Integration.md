@@ -140,3 +140,24 @@ be added incrementally behind the same `KahaProtocol` codec.
   `AVCaptureDevice.requestAccess(for: .video)` before configuring; the preview
   layer attaches in `viewDidLoad` and tracks bounds in `viewDidLayoutSubviews`;
   a denied state shows an Open Settings affordance.
+- **Response-path correction (issues #34 + start-workout no-op):** decompiled
+  `ProtocolParser` dispatches on the notification's class byte (`bArr[0]`), and
+  responses carry **request class | 0x80** (`0x81` fitness acks, `0x82` watch
+  faces, `0x80` info), while watch-initiated events keep the plain class
+  (`0x01 0x05` controls, `0x06` live). History replies stream as `0x7F`
+  multipackets — start packet `[0x7F, cmd, 0, 0, countLo, countHi, d0, d1, f,
+  f, ts0..ts3, data…]` (data from byte 12), continuations
+  `[0x7F, cmd, lenLo, lenHi, data…]` (data from byte 4), where the start's
+  zero length field marks a new stream and bytes 4..5 hold the packet count
+  (`ProtocolParser.f`). `KahaProtocol.ClassId.response*` +
+  `MultipacketAssembler` implement this; `WatchCentral` routes streams to the
+  HR/sleep/SpO₂ decoders by the stream's cmd byte and persists each day.
+- **Find-my-phone (#35):** `FindPhoneCoordinator` rings (looping alarm sound,
+  playback audio session), vibrates (CoreHaptics pattern, `kSystemSoundID_Vibrate`
+  fallback) and blinks the torch for 30 s when the watch fires the event.
+- **Camera shutter (#36):** `WatchCameraCoordinator` runs an `AVCaptureSession`
+  photo pipeline; the watch's capture event takes a real still, saves it to the
+  photo library (`NSPhotoLibraryAddUsageDescription`) with shutter sound.
+- **Hub scan resilience (#37):** a cached-peripheral miss in `WatchCentral.pair`
+  no longer dead-ends in "out of range" — it rescans and auto-pairs the first
+  matching advertisement.

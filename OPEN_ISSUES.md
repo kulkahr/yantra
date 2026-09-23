@@ -445,10 +445,42 @@ state once the ack frame is processed.
 
 ## 33. Xcode error: All interface orientations must be supported unless the app requires full screen.
 
-## 34. Still no data for steps heart rate, spo2 is pulled from watched. 
+## 34. Still no data for steps heart rate, spo2 is pulled from watched. — FIXED ✅
 
-## 35. The watch find my just show notification does not ring or vibrate the phone.
+**Root cause (verified in decompiled `ProtocolParser`):** responses come back with
+**class = request class | 0x80** (`b2 = bArr[0]` dispatch at lines 1589/2327/2982/3319),
+and history payloads stream as **`0x7F` multipackets** (start packet
+`[0x7F, cmd, 0, 0, countLo, countHi, d0, d1, f, f, ts0..ts3, data…]`, continuations
+`[0x7F, cmd, lenLo, lenHi, data…]`). The old code matched response cases on the
+*request* class and never reassembled streams, so every history reply was silently
+dropped.
 
-## 36. Clicking capture in camera on watch doesnot take picture in the phone. 
+Fix: `KahaProtocol.ClassId.responseInfo/fitness/alerts` (0x80/0x81/0x82) added;
+`MultipacketAssembler` reassembles streams and self-identifies them by the start
+packet's cmd byte; `WatchCentral.handleFrame` routes `81`-class acks, `82`-class
+watch faces, `80`-class info, `0x7F` streams → `decodeHRHistory/decodeSleepHistory/
+decodeSpo2History` → WatchStore. Covered by 5 new codec tests (96 total).
 
-## 37. The scan watch from main screen is buggy. The scan works if i select the plus icon from the top. After selecting the newly found watch sometime it shows as out of range.
+## 35. The watch find my just show notification does not ring or vibrate the phone. — FIXED ✅
+
+`FindPhoneCoordinator` (WatchAssistants.swift) now fires on the watch's
+find-my-phone event: looping ringtone (`AVAudioPlayer` on the system alarm sound,
+playback category so it sounds even on mute), repeating CoreHaptics pattern
+(fallback `kSystemSoundID_Vibrate`), and a blinking flashlight for 30 s. The watch
+card in WatchView notes the ring state.
+
+## 36. Clicking capture in camera on watch doesnot take picture in the phone. — FIXED ✅
+
+`WatchCameraCoordinator` runs a real `AVCaptureSession` photo pipeline: the
+watch's capture event triggers an actual still photo, saved to the photo library
+with shutter sound + haptic. Added `NSPhotoLibraryAddUsageDescription` to
+Info.plist. Entering camera remote from the watch opens the session so the
+shutter fires instantly.
+
+## 37. The scan watch from main screen is buggy. The scan works if i select the plus icon from the top. After selecting the newly found watch sometime it shows as out of range. — FIXED ✅
+
+`WatchCentral.pair` hit `retrievePeripherals(withIdentifiers:)` and failed hard
+with "watch out of range — rescan" whenever the row wasn't in the system cache
+(fresh discovery after reboot, iOS cache eviction). Now: cache miss triggers an
+automatic rescan that auto-pairs the first matching advertisement (name-filter
+match, same path as QR pairing) instead of erroring out.
