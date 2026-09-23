@@ -58,6 +58,10 @@ final class WatchCentral: NSObject, ObservableObject {
     private var scanTimeout: DispatchWorkItem?
     /// Peripheral id being paired (persisted into DeviceStore by the hub).
     private var pendingPair: UUID?
+    /// QR-pairing targets: MAC from the QR (logged only — iOS addresses by
+    /// peripheral UUID) and the decoded name filter used to match advertisements.
+    private var connectTargetMAC: String?
+    private var connectTargetName: String?
 
     override init() {
         super.init()
@@ -104,6 +108,48 @@ final class WatchCentral: NSObject, ObservableObject {
         } else {
             stage = .failed("watch out of range — rescan")
         }
+    }
+
+    // MARK: QR pairing (official-app parity, SRD-010 §3)
+
+    /// Pairs straight from a scanned QR payload (`btname=…&mac=…`). With a MAC
+    /// the watch is addressed directly (decompiled `getRemoteDevice` parity);
+    /// without one we scan for the name filter and pair the first hit
+    /// (`ScanDeviceRequest` scanFilter parity).
+    func pair(fromQR qr: KahaProtocol.PairingQR) {
+        if let mac = qr.mac {
+            appendLog("QR: \(qr.nameFilter) @ \(mac)")
+            connect(mac: mac, name: qr.nameFilter)
+        } else {
+            appendLog("QR: no MAC — scanning for \(qr.nameFilter)")
+            scanAndPair(nameFilter: qr.nameFilter)
+        }
+    }
+
+    /// Direct connect by MAC — mirrors the official app's
+    /// `BluetoothAdapter.getRemoteDevice(mac)` + connect path.
+    func connect(mac: String, name: String) {
+        // iOS has no MAC-level addressing; the hub re-identifies the peripheral
+        // by scanning briefly and matching the advertised name filter — the
+        // discovery callback records `peripheralId` for later direct reconnects.
+        connectTargetMAC = mac.uppercased()
+        connectTargetName = name.uppercased()
+        resetLink()
+        foundWatches = []
+        stage = .scanning
+        guard central.state == .poweredOn else { return }
+        central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
+    }
+
+    /// Name-filter scan → pair first matching advertisement (no MAC in QR).
+    private func scanAndPair(nameFilter: String) {
+        connectTargetMAC = nil
+        connectTargetName = nameFilter.uppercased()
+        resetLink()
+        foundWatches = []
+        stage = .scanning
+        guard central.state == .poweredOn else { return }
+        central.scanForPeripherals(withServices: [cb(KahaProtocol.GATT.uartService)], options: nil)
     }
 
     func disconnect() {
@@ -314,9 +360,29 @@ extension WatchCentral: CBCentralManagerDelegate {
                         advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard stage == .scanning else { return }
         let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name
-        guard let n = name, n.lowercased().contains("stormcall") else { return }
+        guard let n = name else { return }
+        let upper = n.uppercased()
+        // QR-pairing scan: match the decoded name filter (official-app parity:
+        // name starts with the filter, e.g. STORMCALL…). Normal scan: any
+        // stormcall device.
+        if let filter = connectTargetName {
+            guard upper.hasPrefix(filter) || filter.hasPrefix(upper) else { return }
+        } else if !upper.contains("STORMCALL") {
+            return
+        }
+        // QR path with MAC — the watch name itself carries the MAC tail
+        // (e.g. stormcall_3_0610); accept by name-filter match, then connect.
         let entry = DiscoveredWatch(id: peripheral.identifier, name: n, rssi: RSSI.intValue)
         if !foundWatches.contains(entry) { foundWatches.append(entry) }
+        // Auto-pair on first hit when pairing was initiated by QR/MAC.
+        if connectTargetName != nil {
+            stopScan()
+            pendingPair = peripheral.identifier
+            resetLink()
+            peripheral.delegate = self
+            central.connect(peripheral)
+            stage = .connecting
+        }
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {

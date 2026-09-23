@@ -203,4 +203,33 @@ final class KahaProtocolTests: XCTestCase {
         let expected = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: Date()))!
         XCTAssertTrue(cal.isDate(samples[0].date, inSameDayAs: expected))
     }
+
+    // MARK: - Pairing QR (FragmentQRScanDeviceViewModel.startQRScan parity)
+
+    func testPairingQRFullPayload() {
+        let qr = KahaProtocol.parsePairingQR(
+            "https://app.boat-lifestyle.com/pair?btname=stormcall_3_0610&mac=AABBCCDDEEFF")!
+        // substringBeforeLast("_") parity: only the LAST underscore segment is
+        // dropped → STORMCALL_3 (the advertised-name prefix of stormcall_3_0610).
+        XCTAssertEqual(qr.deviceName, "STORMCALL_3")
+        XCTAssertEqual(qr.nameFilter, "STORMCALL_3")
+        XCTAssertEqual(qr.mac, "AA:BB:CC:DD:EE:FF")
+    }
+
+    func testPairingQRMcKeyAndColonMAC() {
+        let qr = KahaProtocol.parsePairingQR("btname=stormcall_3_0610&mc=AA:BB:CC:DD:EE:FF")!
+        XCTAssertEqual(qr.mac, "AA:BB:CC:DD:EE:FF", "17-char colon MAC kept as-is")
+    }
+
+    func testPairingQRNameSpacesAndNoMAC() {
+        let qr = KahaProtocol.parsePairingQR("btname=storm%20call2_x1")!
+        XCTAssertEqual(qr.deviceName, "STORM CALL2")
+        XCTAssertEqual(qr.nameFilter, "STORM CALL2")
+        XCTAssertNil(qr.mac, "no mac=/mc= → scan by name")
+    }
+
+    func testPairingQRRejectsNonBoatPayload() {
+        XCTAssertNil(KahaProtocol.parsePairingQR("https://example.com/nothing"))
+        XCTAssertNil(KahaProtocol.parsePairingQR("btname="))
+    }
 }

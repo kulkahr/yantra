@@ -6,6 +6,7 @@ import ScaleKit
 struct WatchView: View {
     @ObservedObject var watch = WatchCentral.shared
     @State private var historyDay = 0
+    @State private var showQRScanner = false
 
     var body: some View {
         List {
@@ -30,6 +31,11 @@ struct WatchView: View {
             switch watch.stage {
             case .idle:
                 Button("Scan for Storm Call 3") { watch.startScan() }
+                Button {
+                    showQRScanner = true
+                } label: {
+                    Label("Pair with watch QR code", systemImage: "qrcode.viewfinder")
+                }
                 ForEach(watch.foundWatches) { w in
                     Button {
                         watch.stopScan()
@@ -65,9 +71,19 @@ struct WatchView: View {
                 Label(msg, systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                 Button("Scan again") { watch.startScan() }
+                Button {
+                    showQRScanner = true
+                } label: {
+                    Label("Pair with watch QR code", systemImage: "qrcode.viewfinder")
+                }
             }
         } header: {
             Text("Connection")
+        }
+        .sheet(isPresented: $showQRScanner) {
+            WatchQRScannerView { qr in
+                watch.pair(fromQR: qr)
+            }
         }
     }
 

@@ -342,6 +342,64 @@ public enum KahaProtocol {
         return out
     }
 
+    // MARK: - Pairing QR payload (FragmentQRScanDeviceViewModel.startQRScan)
+
+    /// Decoded boAt pairing QR — the code shown by the watch's "pair" screen
+    /// and scanned by the official app's camera (ML-kit barcode, format 256 =
+    /// QR). Format: `...btname=<NAME>...mac=<MAC>|mc=<MAC>...` (case-insensitive
+    /// keys, name may carry `%20` for spaces and trailing `_<suffix>`).
+    public struct PairingQR: Equatable {
+        /// Advertised device name, underscore suffix stripped (`stormcall_3_0610` → `stormcall`).
+        public var deviceName: String
+        /// The name filter to match advertisements against (uppercase, spaces restored).
+        public var nameFilter: String
+        /// MAC address colon-normalized to `AA:BB:CC:DD:EE:FF` (nil when the QR
+        /// carries no `mac=`/`mc=` — the app then scans by name instead).
+        public var mac: String?
+    }
+
+    /// Parses a pairing-QR payload byte-for-byte like the decompiled
+    /// `startQRScan`: lowercase the whole string, extract after `btname=`,
+    /// uppercase, strip the trailing `_<suffix>` (underscore-split, last
+    /// segment dropped), restore `%20` → space. MAC from `mc=` or `mac=`;
+    /// 12 hex digits → `AA:BB:…` pairs, 17 chars with colons kept as-is.
+    public static func parsePairingQR(_ payload: String) -> PairingQR? {
+        let lower = payload.lowercased()
+        guard lower.contains("btname=") else { return nil }
+        // Decompiled order: substring-after btname → uppercase → strip
+        // trailing _suffix → %20 → space.
+        let rawName = substring(after: "btname=", in: lower)
+            .replacingOccurrences(of: "%20", with: " ")
+            .uppercased()
+        guard !rawName.isEmpty else { return nil }
+        let baseName = rawName.split(separator: "_").dropLast().joined(separator: "_")
+        let nameFilter = baseName
+        var mac: String?
+        for key in ["mc=", "mac="] where lower.contains(key) {
+            let raw = substring(after: key, in: lower)
+            guard !raw.isEmpty else { continue }
+            let digits = raw.replacingOccurrences(of: ":", with: "")
+            if raw.contains(":"), raw.count == 17 {
+                mac = raw.uppercased()
+            } else if digits.count >= 12 {
+                let pairs = stride(from: 0, to: 12, by: 2).map { i -> String in
+                    String(digits.dropFirst(i).prefix(2))
+                }
+                mac = pairs.joined(separator: ":").uppercased()
+            }
+            break
+        }
+        return PairingQR(deviceName: baseName, nameFilter: nameFilter, mac: mac)
+    }
+
+    /// First occurrence of `key`'s value, up to the next `&` or whitespace.
+    private static func substring(after key: String, in s: String) -> String {
+        guard let r = s.range(of: key) else { return "" }
+        let rest = s[r.upperBound...]
+        let end = rest.firstIndex(where: { $0 == "&" || $0 == " " || $0 == "\n" }) ?? rest.endIndex
+        return String(rest[..<end])
+    }
+
     // MARK: - Helpers
 
     static func leFloat(_ bytes: [UInt8], _ offset: Int) -> Float {
