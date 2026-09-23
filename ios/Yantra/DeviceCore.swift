@@ -269,4 +269,5 @@ protocol ScanReporter: DeviceScanner {
 }
 
 extension ScaleScanner: ScanReporter {}
+extension WatchScanner: ScanReporter {}
 extension NamePrefixScanner: ScanReporter {}

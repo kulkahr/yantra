@@ -94,25 +94,83 @@ public protocol ScaleEventSink: AnyObject {
     func requestDisconnect()
 }
 
-// MARK: - Watch driver (stub — SRD-010)
+// MARK: - Watch driver (SRD-010)
 
-/// Smart-watch driver stub (SRD-009 FR-6). Protocol specifics land in
-/// SRD-010 once a target watch is chosen; the app structure is final now.
+/// Smart-watch driver (SRD-010): boAt Storm Call 3 family via the KaHa
+/// "Leonardo" protocol over Nordic UART. The app attaches its `WatchCentral`
+/// model through `WatchSessionBridge.attach(model:)` (same pattern as the
+/// scale's `ScaleSessionBridge`).
 public final class WatchDriver: DeviceDriver {
     public let kind: DeviceKind = .watch
     public let displayName = "Smart Watch"
-    public let summary = "Health & activity data — protocol TBD (SRD-010)"
-    public let isStub = true
+    public let summary = "boAt Storm Call 3 — live heart rate, steps, history"
+    public let isStub = false
 
     public init() {}
 
     public func makeScanner() -> DeviceScanner {
-        NamePrefixScanner(prefixes: ["Watch", "Band"], kind: .watch)
+        WatchScanner()
     }
 
     public func makeSession(advertisement: AdvertisementSnapshot) -> DeviceSession {
-        StubSession(kind: .watch, advertisement: advertisement)
+        WatchSessionBridge(advertisement: advertisement)
     }
+}
+
+/// Matches Storm Call 3 advertisements: case-insensitive `stormcall` name
+/// prefix (e.g. `stormcall_3_0610`). Falls back to the generic prefix
+/// scanner's matching for other watch families later.
+public final class WatchScanner: DeviceScanner {
+    public var onFound: ((AdvertisementSnapshot) -> Void)?
+    private var reporting = Set<UUID>()
+
+    public init() {}
+
+    public func start() { reporting.removeAll() }
+
+    public func stop() { reporting.removeAll() }
+
+    public func report(peripheralId: UUID, name: String?, rssi: Int, mfg: Data?) {
+        guard let n = name, n.lowercased().contains("stormcall") else { return }
+        guard !reporting.contains(peripheralId) else { return }
+        reporting.insert(peripheralId)
+        onFound?(AdvertisementSnapshot(peripheralId: peripheralId, name: name,
+                                       rssi: rssi, manufacturerData: mfg, kind: .watch))
+    }
+}
+
+/// Bridges the hub's `CentralEvent`s into the app's watch model. The
+/// KaHa orchestration (subscription order, command queue, parsing) lives in
+/// the app layer (`WatchCentral`), exposed here as the session's model.
+public final class WatchSessionBridge: DeviceSession {
+    public private(set) var model: AnyObject = NSObject()
+    /// Set by the app when it wires the real WatchCentral.
+    public weak var appModel: WatchEventSink?
+
+    public init(advertisement: AdvertisementSnapshot) {
+        // The app attaches its WatchCentral (an ObservableObject) right
+        // after construction via attach(model:).
+    }
+
+    /// App layer attaches its published model.
+    public func attach(model: AnyObject) {
+        self.model = model
+    }
+
+    public func handle(_ event: CentralEvent) {
+        appModel?.handle(event)
+    }
+
+    public func disconnect() {
+        appModel?.requestDisconnect()
+    }
+}
+
+/// The watch orchestration interface the app's model implements to receive
+/// hub events (keeps ScaleKit decoupled from SwiftUI/CB types).
+public protocol WatchEventSink: AnyObject {
+    func handle(_ event: CentralEvent)
+    func requestDisconnect()
 }
 
 // MARK: - Bulb driver (stub — SRD-011)

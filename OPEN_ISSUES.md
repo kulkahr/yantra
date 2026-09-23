@@ -1,10 +1,9 @@
 # Open Issues
 
-> **Status 2026-09-23:** all 15 issues below are FIXED ✅ and verified (ScaleKit `swift test` 62/62 ·
-> Firefly `BUILD SUCCEEDED` zero warnings · FireflyTests 8/8). The app has since been restructured
-> into the SRD-009 multi-device hub: Devices hub is the home screen, the scale is the first driver,
-> watch/bulb drivers ship as documented stubs (SRD-010/SRD-011 placeholders). New issues go below
-> the existing entries as `## 16. …`.
+> **Status 2026-09-23 (evening):** issues #1–#16 all FIXED ✅ and verified (ScaleKit
+> `swift test` 72/72 · Firefly/Yantra `BUILD SUCCEEDED` zero warnings · YantraTests green).
+> SRD-010 (Watch Integration) is now IMPLEMENTED for the boAt Storm Call 3 — see the
+> post-#16 entry. New issues go below the existing entries as `## 17. …`.
 
 ## 1. Scan mode lists the same scale 10+ times — FIXED ✅
 
@@ -232,3 +231,63 @@ not the scale's `A640` byte. Our piecewise V→% curve mapped a healthy ~3.1 V s
 (clamped 0–100); `isLow` = ≤ 10 % (the decompiled DFU gate). The volts formula is kept
 only as an informational estimate. On hardware the readout should now match the official
 app.
+
+## 16. Building/deploying in Xcode errors — `YantraApp.swift:9:13 Cannot find 'DevicesHubView' in scope` — FIXED ✅
+
+**Root cause (project file, not code):** `project.pbxproj` had a `PBXBuildFile` entry for
+`DevicesHubView.swift` (`62A1737D…`) whose `PBXFileReference` (`1213AD11…`) was **missing**
+from the objects section — a dangling reference. Xcode therefore never compiled
+`DevicesHubView.swift` into the target, and every other file that referenced the hub
+(`YantraApp.swift` root) failed with "cannot find in scope".
+
+**Fix:** added the missing `PBXFileReference` for `1213AD115220626727ADF7F1`. No source
+changes. Verified: `xcodebuild -scheme Yantra -destination 'generic/platform=iOS Simulator'
+build` → **BUILD SUCCEEDED** (zero warnings).
+
+---
+
+## 17. boAt Storm Call 3 watch support (SRD-010) — IMPLEMENTED ✅
+
+**Request:** the boAt Crest app on your Android phone connects to the watch
+`stormcall_3_0610`; bring the same watch functionality into Yantra. Start with an SRD,
+then implement.
+
+**What was done:**
+
+1. **APK pull + decompile** — pulled `com.coveiot.android.boat` (boAt Crest) from the
+   connected Redmi Note 5 Pro via adb → `apk/boat/`; jadx-decompiled → `decompiled/boat/`
+   (34,172 classes).
+2. **Protocol identification** — device name `stormcall_3_0610` maps to
+   `DeviceType.STORMCALL3` → `StormCall3BleApiImpl` → `LeonardoBleApiImpl`/`LeonardoBleCmdService`
+   (Cove "Leonardo" stack) over the **KaHa Pte SDK** (`setKaHaRealtekChip(true)`, Realtek
+   BT-calling platform). Transport = Nordic-UART service
+   `6E400001-B5A3-F393-E0A9-E50E24DCCA9E` (write `0002` / notify `0003`).
+3. **SRD-010 rewritten** (`docs/SRD-010-Watch-Integration.md`) with the real frame format
+   `[classId, cmdId, len=total, LE] + payload`, the command map (info `0x00_xx`, fitness
+   `0x01_xx`, live pushes `0x06_80/81`, multipacket `0x7F`) and payload layouts transcribed
+   from `BleUUID.java` + `ProtocolParser.java` + response classes.
+4. **`ScaleKit/KahaProtocol.swift`** — pure-Swift codec: frame build/parse, device-time
+   BCD set/parse, live-health (HR/BP/RR/stress), live-steps (+float32 distance/calories),
+   battery, HR-history decoding. 10 new unit tests with decompiled golden vectors.
+5. **`ScaleKit/Drivers.swift`** — `WatchDriver` un-stubbed (`isStub = false`),
+   `WatchScanner` (matches `stormcall` prefix), `WatchSessionBridge` + `WatchEventSink`
+   (same pattern as the scale driver).
+6. **`ios/Yantra/WatchCentral.swift`** — connect → service discovery → subscribe UART +
+   battery CCCDs → `0x2A26` firmware read → info burst (name/fw/time/battery, 24-h format,
+   clock resync) → live pushes. Owns its `CBCentralManager` (scale driver parity).
+7. **`ios/Yantra/WatchView.swift`** — scan/pair section, live HR + BP + steps cards,
+   today/yesterday HR history pull, battery/firmware/clock device section, log.
+8. **Hub wiring** — `DevicesHubView` routes the watch to `WatchView`;
+   `AddDeviceSheet.pair` hands discovered watches to `WatchCentral`;
+   `WatchScanner` added to the transport's `ScanReporter` conformances so
+   hub-wide scan reports reach it.
+
+**Verified:** ScaleKit `swift test` 72/72 (was 62; +10 Kaha tests) · Yantra
+`xcodebuild build` zero warnings · `YantraTests` TEST SUCCEEDED.
+
+**On-device retest:** Add device → Smart Watch → pick `stormcall_3_0610` → the watch page
+should show firmware, battery, and (while worn) live HR/steps pushes. HR history requires
+auto-measure enabled (the pull command enables it at 60-min interval, Crest parity).
+
+**Not in this pass (SRD-010 §8):** sleep/SpO2 history, notifications, watch-face upload,
+BT-call control — command classes are mapped in the decompiled app for incremental follow-ups.

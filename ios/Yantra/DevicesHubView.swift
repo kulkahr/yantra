@@ -74,6 +74,8 @@ struct DevicesHubView: View {
         switch driver.kind {
         case .scale:
             MainTabView(central: ScaleCentral.shared)
+        case .watch:
+            WatchView()
         default:
             EmptyView()
         }
@@ -161,11 +163,23 @@ struct AddDeviceSheet: View {
         transport.stopScan()
         store.upsert(PairedDevice(peripheralId: adv.peripheralId, kind: adv.kind,
                                   name: adv.name ?? "", addedAt: Date()))
-        if adv.kind == .scale {
+        switch adv.kind {
+        case .scale:
             // Legacy bind flow (pair machine, slot, DFU…) — unchanged (SRD-009 FR-5).
             ScaleCentral.shared.adoptDiscovered(adv)
             dismiss()
+        case .watch:
+            // SRD-010: hand the discovered watch to WatchCentral for the
+            // connect + KaHa handshake; the hub entry navigates via the
+            // inventory row (Devices → Smart Watch).
+            let watch = WatchCentral.shared
+            watch.pair(WatchCentral.DiscoveredWatch(id: adv.peripheralId,
+                                                    name: adv.name ?? "Storm Call 3",
+                                                    rssi: adv.rssi))
+            dismiss()
+        default:
+            // Stub kinds: recorded but no session (their SRDs are pending).
+            break
         }
-        // Stub kinds: recorded but no session (their SRDs are pending).
     }
 }
