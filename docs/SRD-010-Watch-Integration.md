@@ -123,3 +123,20 @@ be added incrementally behind the same `KahaProtocol` codec.
 - **Health export (issue #29):** `HealthKitWriter.writeWatchDays` writes stored days as
   daily steps, hourly HR samples, sleep-stage category samples (core/deep/REM) and daily
   SpO₂, deduped by `watchDay:<dayKey>` metadata.
+- **Sport session control (phone-started workouts):** decompiled
+  `CurrentSportModeReq.a()` = `{1, 0x8B, 6, 0, mode, indoorFlag}` with mode ids
+  walking=1, running=2, cycling=3, swimming=4, taichi=5, none=0 and
+  `indoorFlag = isIndoor ? 0 : 1`; ack `01 8B` payload[0]=1 = success
+  (`CurrentSportModesRes`). Pause/resume = `{1, 0x97, 5, 0, 1|2}`
+  (`ActivityPauseResumetReq`, ack `01 97` payload[0]=1). Implemented as
+  `KahaProtocol.startSportMode/stopSportMode/pauseSportSession/resumeSportSession`,
+  surfaced in WatchView as a Start-workout menu with a live elapsed timer, pause/
+  resume and end. **Stop semantics:** the official app has no stop command — the
+  session is ended on the watch itself (or by re-selecting mode 0); on end, the app
+  pulls today's activity summary (`01 23`) so the workout appears in Workouts (#28).
+- **QR scanner black-preview fix:** the scanner never requested camera
+  authorization, so `AVCaptureDeviceInput(device:)` failed silently while
+  `.notDetermined` and the session rendered black. `QRReader.start` now awaits
+  `AVCaptureDevice.requestAccess(for: .video)` before configuring; the preview
+  layer attaches in `viewDidLoad` and tracks bounds in `viewDidLayoutSubviews`;
+  a denied state shows an Open Settings affordance.

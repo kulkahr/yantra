@@ -332,6 +332,28 @@ day) and persist watch data locally.
 **Verified:** ScaleKit `swift test` 78/78 · Yantra `xcodebuild build` zero warnings ·
 `YantraTests` TEST SUCCEEDED.
 
+## 17a. Start a workout (sport session) on the watch from the app — IMPLEMENTED ✅
+
+Reverse-engineered from the decompiled `CurrentSportModeReq` / `ActivityPauseResumetReq`:
+
+- **Start** — `01 8B 06 00 [mode, outdoor]`: mode ids walking=1, running=2, cycling=3,
+  swimming=4, taichi=5 (`SportMode` enum in `KahaProtocol`); outdoor byte = 1 unless
+  indoor is requested. Watch acks payload[0]=1 and switches to its sport screen.
+- **Pause / resume** — `01 97 05 00 1|2`, ack payload[0]=1.
+- **End** — the official app has no stop command; the session is ended **on the watch**
+  (confirm the save/exit prompt on its screen). Yantra additionally supports the
+  phone-side stop by re-selecting mode 0; either way the app then pulls today's
+  activity summary (`01 23`) so the workout shows up in the Workouts list (#28).
+- **UI** — Workouts section: Start-workout menu (outdoor modes + treadmill), live
+  elapsed timer, pause/resume, End workout. `WatchCentral.sportSession` tracks the
+  live state; codec covered by 4 new KahaProtocol tests.
+
+Also fixed here: the QR scan screen showed black because camera authorization was
+never requested (`AVCaptureDeviceInput` fails silently while `.notDetermined`).
+`QRReader` now awaits `requestAccess` before configuring the session, shows a
+permission-denied state with an Open Settings button, and the preview layer tracks
+the view bounds (`viewDidLayoutSubviews`) instead of a one-shot zero frame.
+
 ## 19. Watch battery not visible. — FIXED ✅
 
 Battery level is read over GATT (`0x2A19` Battery Service) during the connect
@@ -422,3 +444,11 @@ state once the ack frame is processed.
 ## 32. Xcode error: /Volumes/Seagate/realme-scale-re/scalekit/Sources/ScaleKit/PairStateMachine.swift:218:30 Immutable value 'e' was never used; consider replacing with '_' or removing it — FIXED ✅
 
 ## 33. Xcode error: All interface orientations must be supported unless the app requires full screen.
+
+## 34. Still no data for steps heart rate, spo2 is pulled from watched. 
+
+## 35. The watch find my just show notification does not ring or vibrate the phone.
+
+## 36. Clicking capture in camera on watch doesnot take picture in the phone. 
+
+## 37. The scan watch from main screen is buggy. The scan works if i select the plus icon from the top. After selecting the newly found watch sometime it shows as out of range.
