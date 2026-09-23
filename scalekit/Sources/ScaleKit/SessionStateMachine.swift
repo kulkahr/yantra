@@ -35,28 +35,35 @@ public struct SessionStateMachine {
         public var slot: Int = 1
         public var unit: UnitType = .kg
         public var profile: UserProfile?
+        /// Body-fat formula set pushed as `0x1006` (SRD-005 FR-4); nil = don't push.
+        public var formula: FormulaType?
+        /// Weight goal pushed as `0x1003` for the session slot; nil = don't push.
+        public var targetKg: Double?
         public var utcProvider: () -> UInt32
         public var timeZoneHex: () -> UInt8
         public var dateProvider: () -> (Int, Int, Int, Int, Int, Int)
         public var maxResends: Int = 3
 
-        public init(mac: String, firmwareVersion: String, deviceId: String,
+    public init(mac: String, firmwareVersion: String, deviceId: String,
                     slot: Int = 1, unit: UnitType = .kg, profile: UserProfile? = nil,
+                    formula: FormulaType? = nil, targetKg: Double? = nil,
                     utcProvider: @escaping () -> UInt32,
                     timeZoneHex: @escaping () -> UInt8,
                     dateProvider: @escaping () -> (Int, Int, Int, Int, Int, Int),
                     maxResends: Int = 3) {
-            self.mac = mac
-            self.firmwareVersion = firmwareVersion
-            self.deviceId = deviceId
-            self.slot = slot
-            self.unit = unit
-            self.profile = profile
-            self.utcProvider = utcProvider
-            self.timeZoneHex = timeZoneHex
-            self.dateProvider = dateProvider
-            self.maxResends = maxResends
-        }
+        self.mac = mac
+        self.firmwareVersion = firmwareVersion
+        self.deviceId = deviceId
+        self.slot = slot
+        self.unit = unit
+        self.profile = profile
+        self.formula = formula
+        self.targetKg = targetKg
+        self.utcProvider = utcProvider
+        self.timeZoneHex = timeZoneHex
+        self.dateProvider = dateProvider
+        self.maxResends = maxResends
+    }
     }
 
     /// User profile mirroring the fields of `0x1001 pushUserInfo`.
@@ -88,6 +95,13 @@ public struct SessionStateMachine {
         /// Live stream samples (raw frames on the real-time path).
         public var liveSamples: [[UInt8]] = []
         public var drainFinished = false
+        /// Config-echo mismatches (0x2001/0x2003/0x2004 vs pushed values) —
+        /// surfaced per SRD-005 FR-3.
+        public var echoMismatches: [ConfigEcho.Mismatch] = []
+        /// Raw config bytes of rejected pushes (0x1000 callback status != 1).
+        public var rejectedSettings: [UInt8] = []
+        /// Battery raw byte when a fresh `A640` read response arrives (SRD-006 FR-3).
+        public var batteryRawByte: Int?
     }
 
     // MARK: State
@@ -265,6 +279,33 @@ public struct SessionStateMachine {
                 phase = .pushingConfig
                 out.actions += drainQueue().actions
 
+            case A6Command.settingCallback.rawValue:
+                // 0x1000: scale accepted (status 1) or rejected a pushed setting.
+                if let cb = ConfigEcho.parseSettingCallback(payload), !cb.accepted {
+                    out.rejectedSettings.append(cb.configType)
+                }
+
+            case A6Command.receiveUserInfo.rawValue:
+                // 0x2001 echo of the 0x1001 push — verify against what we sent.
+                if let echo = ConfigEcho.parseUserInfo(payload), let p = config.profile {
+                    out.echoMismatches += ConfigEcho.verify(
+                        echo, slot: config.slot, sexMale: p.sexMale,
+                        age: p.age, heightMeters: p.heightMeters)
+                }
+
+            case A6Command.receiveTarget.rawValue:
+                // 0x2003 echo of the 0x1003 push.
+                if let echo = ConfigEcho.parseTarget(payload) {
+                    out.echoMismatches += ConfigEcho.verify(
+                        echo, slot: config.slot, targetKg: config.targetKg)
+                }
+
+            case A6Command.receiveUnit.rawValue:
+                // 0x2004 echo of the 0x1004 push.
+                if let echo = ConfigEcho.parseUnit(payload), echo != config.unit {
+                    out.echoMismatches.append(.unit(expected: config.unit, got: echo))
+                }
+
             case A6Command.pushUserInfo.rawValue,
                  A6Command.pushTime.rawValue,
                  A6Command.pushUnit.rawValue,
@@ -273,12 +314,8 @@ public struct SessionStateMachine {
                  A6Command.pushFormula.rawValue,
                  A6Command.pushHeartRateSwitch.rawValue,
                  A6Command.responseInit.rawValue,
-                 A6Command.measureSetting.rawValue,
-                 A6Command.receiveUserInfo.rawValue,
-                 A6Command.receiveTarget.rawValue,
-                 A6Command.receiveUnit.rawValue,
-                 A6Command.settingCallback.rawValue:
-                // echoes/callbacks — no state change
+                 A6Command.measureSetting.rawValue:
+                // command echoes — no state change
                 break
 
             case A6Command.newMeasureData.rawValue:
@@ -331,6 +368,16 @@ public struct SessionStateMachine {
         queue.enqueue(characteristic: GATT.writeData,
                       payload: A6Commands.pushUnit(config.unit),
                       codec: codec, mac: config.mac, xored: xored)
+        if let f = config.formula {
+            queue.enqueue(characteristic: GATT.writeData,
+                          payload: A6Commands.pushFormula(f),
+                          codec: codec, mac: config.mac, xored: xored)
+        }
+        if let t = config.targetKg {
+            queue.enqueue(characteristic: GATT.writeData,
+                          payload: A6Commands.pushTarget(slot: config.slot, targetKg: t),
+                          codec: codec, mac: config.mac, xored: xored)
+        }
         queue.enqueue(characteristic: GATT.writeData,
                       payload: A6Commands.pushHeartRateSwitch(on: true),
                       codec: codec, mac: config.mac, xored: xored)

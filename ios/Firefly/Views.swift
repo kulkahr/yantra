@@ -306,6 +306,18 @@ struct HistoryView: View {
             }
             .font(.caption).foregroundStyle(.secondary)
         }
+        // Issue #13: fix wrong attributions or delete bad records entirely.
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(role: .destructive) {
+                MeasurementStore.shared.delete(id: r.id)
+                records.removeAll { $0.id == r.id }
+            } label: { Label("Delete", systemImage: "trash") }
+            Button {
+                assigning = [r]
+                showAssignment = true
+            } label: { Label("Assign", systemImage: "person") }
+            .tint(.blue)
+        }
     }
 }
 
@@ -447,25 +459,36 @@ private struct AssignmentSheet: View {
 struct DeviceView: View {
     @ObservedObject var central: ScaleCentral
     @StateObject private var profile = ProfileStore.shared
+    @StateObject private var cfg = ScaleConfigStore.shared
     @ObservedObject private var people = PersonStore.shared
     @State private var slot = 1
     @State private var newPersonName = ""
     @State private var newPersonSlot = 1
     @State private var editingPerson: Person?
+    @State private var confirmClear = false
 
     var body: some View {
         NavigationStack {
             List {
                 bindSection
+                deviceInfoSection
+                scaleConfigSection
                 peopleSection
                 profileSection
                 scanSection
                 sessionSection
+                clearMemoryButton
                 debugSection
             }
             .navigationTitle("Device")
             .sheet(item: $editingPerson) { p in
                 PersonEditorView(person: p)
+            }
+            .alert("Clear scale memory?", isPresented: $confirmClear) {
+                Button("Cancel", role: .cancel) {}
+                Button("Clear", role: .destructive) { central.clearScaleMemory() }
+            } message: {
+                Text("All stored weigh-ins on the scale will be erased. Records already synced into History are kept.")
             }
         }
     }
@@ -489,6 +512,72 @@ struct DeviceView: View {
                 Label("No scale bound yet", systemImage: "link.badge.plus")
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    /// SRD-006 FR-1/FR-3: identity fields + battery from the connect reads.
+    private var deviceInfoSection: some View {
+        Section("Device") {
+            if central.deviceInfo.isEmpty && central.batteryPercent == nil {
+                Text("Connect to the scale to read device info.")
+                    .foregroundStyle(.secondary).font(.footnote)
+            }
+            ForEach(central.deviceInfo.sorted(by: { $0.key < $1.key }), id: \.key) { k, v in
+                LabeledRow(k, v)
+            }
+            if let pct = central.batteryPercent {
+                HStack {
+                    Text("Battery")
+                    Spacer()
+                    if central.batteryLow {
+                        Label("\(pct) % — low", systemImage: "battery.25")
+                            .foregroundStyle(.red)
+                    } else {
+                        let icon = pct > 75 ? "battery.100" : (pct > 40 ? "battery.50" : "battery.25")
+                        Label("\(pct) %", systemImage: icon)
+                            .foregroundStyle(pct > 40 ? Color.primary : Color.orange)
+                    }
+                }
+            }
+        }
+    }
+
+    /// SRD-005 FR-3/FR-4: unit + formula pickers, clear-memory action.
+    private var scaleConfigSection: some View {
+        Section {
+            Picker("Unit", selection: unitBinding) {
+                Text("kg").tag(0)
+                Text("lb").tag(1)
+                Text("st").tag(2)
+            }
+            Picker("Body-fat formula", selection: formulaBinding) {
+                Text("Scale default").tag(-1)
+                Text("China (0x1006=0)").tag(0)
+                Text("External (0x1006=1)").tag(1)
+            }
+        } header: {
+            Text("Scale configuration")
+        } footer: {
+            Text("Pushed to the scale at the next session start; the scale echoes each setting back and mismatches are logged.")
+        }
+    }
+
+    private var unitBinding: Binding<Int> {
+        Binding(get: { Int(cfg.unit.rawValue) },
+                set: { if let u = UnitType(rawValue: UInt8($0)) { cfg.unit = u } })
+    }
+
+    private var formulaBinding: Binding<Int> {
+        Binding(get: { cfg.formula.map { Int($0.rawValue) } ?? -1 },
+                set: { cfg.formula = $0 < 0 ? nil : FormulaType(rawValue: UInt8($0)) })
+    }
+
+    private var clearMemoryButton: some View {
+        Section {
+            Button("Clear scale memory", role: .destructive) { confirmClear = true }
+                .disabled(central.sessionMachineActive == false && central.stage != .live)
+        } footer: {
+            Text("Removes all stored weigh-ins from the scale (0x1005). Records already synced to History are kept. Requires a live session.")
         }
     }
 
@@ -603,10 +692,6 @@ struct DeviceView: View {
                     if central.stage == .scanning { central.stopScan() } else { central.startScan() }
                 }
                 Spacer()
-                Picker("Slot", selection: $slot) {
-                    ForEach(1...5, id: \.self) { Text("Slot \($0)").tag($0) }
-                }
-                .pickerStyle(.menu)
             }
             ForEach(central.foundScales) { s in
                 HStack {
@@ -615,7 +700,9 @@ struct DeviceView: View {
                         Text("\(s.mac) · \(s.rssi) dBm").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Bind") { central.bind(s, slot: slot) }
+                    // Issue #12: no slot choice at bind time — one shared scale
+                    // serves every person; slots are owned by People instead.
+                    Button("Bind") { central.bind(s, slot: 1) }
                         .buttonStyle(.borderedProminent)
                         .disabled(central.stage == .connecting || central.stage == .handshaking)
                 }

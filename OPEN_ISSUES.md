@@ -172,3 +172,37 @@ app readings") captures paired samples (raw weigh-in + official fat %/muscle %/B
 then a least-squares refit (`BodyCalibration.fit`) replaces the fat% impedance model and
 affine-corrects the other metrics. Fit report shows the max fat % residual; ≥ 4 samples
 (one person, consistent profile) required.
+
+## 11. Health export duplicates records when tapped repeatedly — FIXED ✅
+
+Each HealthKit sample is now tagged with its `MeasurementRecord.id` (`fireflyRecordId`
+metadata). Before saving, a query filters out ids already present in Health — repeated
+taps (or re-exports after new weigh-ins) only ever add the *new* records. Also reports
+"skipping already saved" so the behavior is visible.
+
+## 12. No slot picker at scan/bind — one scale serves everyone — FIXED ✅
+
+Agreed with the official app's model: binding a scale no longer asks for a user slot.
+The scan list just shows discovered scales with a **Bind** button; user→slot mapping
+lives entirely in the **People** manager (each person claims a slot 1–5, the active
+person's slot is used at session start). Implemented: slot picker removed from the
+bind section; `bind(s, slot: 1)` uses the scale's default slot for the bind handshake
+only.
+
+## 13. No way to fix wrong assignments or delete records — FIXED ✅
+
+History rows now have swipe actions:
+
+- **Assign** (trailing, blue) — re-assign any record to any person at any time
+  (opens the same assignment sheet used for drained records).
+- **Delete** (trailing, destructive) — removes a wrong/bad record from History
+  (`MeasurementStore.delete(id:)`).
+
+Also added earlier in this pass (SRD-004/005/006 completion): battery % + low-battery
+warning and device-info fields on the Device page, feature-bitmap persistence, unit +
+body-fat-formula pickers pushed via `0x1004`/`0x1006` with echo verification
+(`0x2001/0x2003/0x2004` mismatches logged), target-weight push (`0x1003`) from the active
+person's goal, clear-scale-memory (`0x1005`) with confirmation dialog, and per-record
+swipe actions.
+
+## 14. The measurment data should be only added to the app profile that refers to ios user.

@@ -27,6 +27,13 @@ final class ScaleCentral: NSObject, ObservableObject {
     @Published private(set) var lastRecord: MeasurementRecord?
     @Published private(set) var recordCount = 0
     @Published private(set) var log: [String] = []
+    /// Battery % from the `A640` raw byte (SRD-006 FR-3); nil = not read yet.
+    @Published private(set) var batteryPercent: Int?
+    @Published private(set) var batteryLow = false
+    /// Device-info snapshot after the connect-time reads (SRD-006 FR-1).
+    @Published private(set) var deviceInfo: [String: String] = [:]
+    /// True while a session machine exists (gates clear-memory UI).
+    var sessionMachineActive: Bool { sessionMachine != nil }
     /// DFU transfer progress (nil = no update running).
     @Published private(set) var dfuProgress: DfuStateMachine.Progress?
     @Published private(set) var dfuFinished: String?
@@ -224,7 +231,8 @@ final class ScaleCentral: NSObject, ObservableObject {
         readsStarted = true
         // Sequential reads — parallel reads stall on this firmware (wire-verified).
         let wanted: [UUID] = [GATTPlus.firmwareRevision, GATTPlus.modelNumber,
-                              GATTPlus.manufacturerName, GATT.featureInfo, GATT.voltage]
+                              GATTPlus.manufacturerName, GATTPlus.serialNumber,
+                              GATTPlus.hardwareRevision, GATT.featureInfo, GATT.voltage]
         pendingReads = wanted.filter { chars[$0] != nil }
         if pendingReads.isEmpty {
             readsComplete = true
@@ -240,6 +248,23 @@ final class ScaleCentral: NSObject, ObservableObject {
                 self.tryStartMachine()
             }
         }
+    }
+
+    /// Builds the device-info strings shown on the Device page (SRD-006 FR-1).
+    private static func infoSnapshot(from readResults: [UUID: Data]) -> [String: String] {
+        func text(_ u: UUID) -> String? {
+            guard let data = readResults[u],
+                  let raw = String(data: data, encoding: .utf8) else { return nil }
+            let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n\0"))
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        var info: [String: String] = [:]
+        if let v = text(GATTPlus.modelNumber) { info["Model"] = v }
+        if let v = text(GATTPlus.manufacturerName) { info["Manufacturer"] = v }
+        if let v = text(GATTPlus.serialNumber) { info["Serial"] = v }
+        if let v = text(GATTPlus.hardwareRevision) { info["Hardware"] = v }
+        if let v = text(GATTPlus.firmwareRevision) { info["Firmware"] = v }
+        return info
     }
 
     private func tryStartMachine() {
@@ -272,6 +297,16 @@ final class ScaleCentral: NSObject, ObservableObject {
             bind.firmwareVersion = fw
             BindStore.shared.record = bind
             appendLog("fw refreshed from device: \(fw)")
+        }
+        // SRD-006 FR-1/FR-2/FR-3: surface identity fields, feature bitmap and
+        // battery from the connect-time reads.
+        deviceInfo = Self.infoSnapshot(from: readResults)
+        if let raw = readResults[GATT.voltage].map({ $0.count > 0 ? Int($0[$0.startIndex]) : nil }) ?? nil {
+            batteryPercent = Battery.percent(rawByte: raw)
+            batteryLow = Battery.isLow(rawByte: raw)
+        }
+        if let feat = readResults[GATT.featureInfo].map({ [UInt8]($0) }), !feat.isEmpty {
+            BindStore.shared.featureBitmap = feat
         }
         let mac = connectTarget?.mac
             ?? BindStore.shared.record?.mac
@@ -310,11 +345,16 @@ final class ScaleCentral: NSObject, ObservableObject {
             // push, so the scale attributes the measurement to that slot.
             let activeSlot = PersonStore.shared.activePerson?.slot ?? slot
             sessionSlot = activeSlot
+            // SRD-005 FR-4: unit + formula from user settings; target from the
+            // active person's goal (nil → not pushed).
+            let cfg = ScaleConfigStore.shared
+            let targetKg = PersonStore.shared.activePerson?.targetWeightKg
             var m = SessionStateMachine(config: .init(
                 mac: mac, firmwareVersion: effectiveFw,
                 deviceId: BindStore.shared.record?.deviceId
                     ?? mac.replacingOccurrences(of: ":", with: "").lowercased(),
-                slot: activeSlot, unit: .kg, profile: profile,
+                slot: activeSlot, unit: cfg.unit, profile: profile,
+                formula: cfg.formula, targetKg: targetKg,
                 utcProvider: { UInt32(Date().timeIntervalSince1970) },
                 timeZoneHex: {
                     // (offsetMinutes / 15) + 48 — wire-verified (IST → 0x46).
@@ -413,6 +453,13 @@ final class ScaleCentral: NSObject, ObservableObject {
             sessionMachine = m
             performAll(out.actions)
             collectRecords(out)
+            // SRD-005 FR-3: surface echo mismatches / rejected settings.
+            for mismatch in out.echoMismatches {
+                appendLog("⚠ scale echo: \(mismatch)")
+            }
+            for rejected in out.rejectedSettings {
+                appendLog(String(format: "⚠ scale rejected setting 0x%02X", rejected))
+            }
             if m.phase == .live, pendingArm {
                 pendingArm = false
                 let armOut = m.startMeasurement()
@@ -480,6 +527,19 @@ final class ScaleCentral: NSObject, ObservableObject {
         case .protocolError(let s): return "protocol error: \(s)"
         case .userCancelled: return "cancelled"
         }
+    }
+
+    /// `0x1005` clear-scale-memory (SRD-004 FR-4) — user-confirmed via dialog;
+    /// requires a live session so the command flows over an established link.
+    func clearScaleMemory() {
+        guard var m = sessionMachine else {
+            appendLog("⚠ clear-memory needs a live session")
+            return
+        }
+        let out = m.clearScaleMemory()
+        sessionMachine = m
+        performAll(out.actions)
+        appendLog("clear-memory (0x1005) sent — scale erases stored records")
     }
 
     // MARK: - DFU dispatch

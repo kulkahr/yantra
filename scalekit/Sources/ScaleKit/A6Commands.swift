@@ -144,6 +144,27 @@ public enum A6Commands {
     public static func pushHeartRateSwitch(on: Bool = true) -> [UInt8] {
         A6Bytes.from(short: A6Command.pushHeartRateSwitch.rawValue) + [on ? 1 : 0]
     }
+
+    /// `0x1006` push body-fat formula set — literal port of
+    /// `ProtocolCommand.getWeightFormulaCommandForA6`: `[10 06][formulaByte]`.
+    /// `FormulaType`: CHINA(0) / EXTERNAL(1) in the decompiled SDK.
+    public static func pushFormula(_ formula: FormulaType) -> [UInt8] {
+        A6Bytes.from(short: A6Command.pushFormula.rawValue) + [formula.rawValue]
+    }
+
+    /// `0x1003` target DISABLE variant — same frame with enable=0
+    /// (the official app sends this when the user clears their goal).
+    public static func pushTargetDisabled(slot: Int) -> [UInt8] {
+        A6Bytes.from(short: A6Command.pushTarget.rawValue) + [UInt8(slot), 0, 0, 0, 0]
+    }
+}
+
+/// Body-fat formula set selector (`0x1006`) — decompiled `FormulaType`:
+/// CHINA(0) and EXTERNAL(1). Which set the LS213-B honors is firmware-defined;
+/// both are exposed for SRD-005 FR-4 parity.
+public enum FormulaType: UInt8 {
+    case china = 0
+    case external = 1
 }
 
 public enum RegisterState: UInt8 {

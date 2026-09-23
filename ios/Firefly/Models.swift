@@ -97,6 +97,20 @@ final class MeasurementStore {
         }
     }
 
+    /// Removes a record by id (issue #13 — delete wrongly assigned entries).
+    @discardableResult
+    func delete(id: UUID) -> Bool {
+        queue.sync {
+            var all = cache ?? (try? loadLocked()) ?? []
+            let before = all.count
+            all.removeAll { $0.id == id }
+            guard all.count < before else { return false }
+            cache = all
+            persistLocked(all)
+            return true
+        }
+    }
+
     /// Records with no owning person (the History assignment queue).
     func unassignedCount() -> Int {
         loadAll().filter { $0.personId == nil }.count
@@ -430,6 +444,9 @@ final class BindStore {
         /// CBPeripheral.identifier from bind time — lets sessions reconnect via
         /// retrievePeripherals(withIdentifiers:) without scanning.
         var peripheralId: String?
+        /// `A641` feature bitmap read at bind/session (SRD-006 FR-2) — the
+        /// firmware-metadata backup trail (SRD-007 FR-6).
+        var featureBitmap: [UInt8]?
     }
 
     static let shared = BindStore()
@@ -458,6 +475,41 @@ final class BindStore {
                 try? data.write(to: url, options: .atomic)
             }
         }
+    }
+
+    /// Feature bitmap accessor (SRD-006 FR-2) — merges into the stored record.
+    var featureBitmap: [UInt8]? {
+        get { record?.featureBitmap }
+        set {
+            guard var rec = record, let newValue else { return }
+            rec.featureBitmap = newValue
+            record = rec
+        }
+    }
+}
+
+/// Scale configuration choices (SRD-005 FR-4): display unit + body-fat
+/// formula set, pushed to the scale at session start. UserDefaults-backed.
+final class ScaleConfigStore: ObservableObject {
+    static let shared = ScaleConfigStore()
+
+    @Published var unit: UnitType {
+        didSet { defaults.set(unit.rawValue, forKey: "scaleUnit") }
+    }
+    /// nil = don't push a formula (scale default applies).
+    @Published var formula: FormulaType? {
+        didSet {
+            defaults.set(formula.map { Int($0.rawValue) }, forKey: "scaleFormula")
+        }
+    }
+
+    private let defaults = UserDefaults.standard
+
+    init() {
+        unit = UnitType(rawValue: UInt8(defaults.integer(forKey: "scaleUnit"))) ?? .kg
+        formula = defaults.object(forKey: "scaleFormula")
+            .flatMap { $0 as? Int }
+            .flatMap { FormulaType(rawValue: UInt8($0)) }
     }
 }
 
