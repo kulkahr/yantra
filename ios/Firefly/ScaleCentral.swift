@@ -49,6 +49,9 @@ final class ScaleCentral: NSObject, ObservableObject {
     private var readResults: [UUID: Data] = [:]
     private var disconnectRequested = false
     private var connectTarget: (id: UUID, mac: String)?
+    /// Scale being bound (peripheral id + slot) — persisted into the bind record
+    /// so later sessions can `retrievePeripherals(withIdentifiers:)` directly.
+    private var pendingBind: (scaleId: UUID, slot: Int)?
 
     private enum Flow { case pair(slot: Int), session(slot: Int, arm: Bool) }
     private var flow: Flow?
@@ -74,9 +77,9 @@ final class ScaleCentral: NSObject, ObservableObject {
         foundScales = []
         stage = .scanning
         guard central.state == .poweredOn else { return }
-        central.scanForPeripherals(
-            withServices: [cbuuid(GATT.a6Service)],
-            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        // Duplicate filtering ON — one didDiscover row per physical scale; RSSI
+        // refresh handled in didDiscover (keyed by peripheral.identifier).
+        central.scanForPeripherals(withServices: [cbuuid(GATT.a6Service)], options: nil)
     }
 
     func stopScan() {
@@ -88,14 +91,16 @@ final class ScaleCentral: NSObject, ObservableObject {
     func bind(_ scale: DiscoveredScale, slot: Int) {
         connectTarget = (scale.id, scale.mac)
         flow = .pair(slot: slot)
-        stage = .connecting
+        pendingBind = (scale.id, slot)
         resetLinkState()
         if let p = central.retrievePeripherals(withIdentifiers: [scale.id]).first {
             peripheral = p
             p.delegate = self
             central.connect(p)
+            stage = .connecting
         } else {
             startScan()   // connects from didDiscover once seen
+            stage = .connecting
         }
     }
 
@@ -107,14 +112,19 @@ final class ScaleCentral: NSObject, ObservableObject {
         }
         connectTarget = (scale.id, rec.mac)
         flow = .session(slot: rec.slot, arm: arm)
-        stage = .connecting
         resetLinkState()
-        if let p = central.retrievePeripherals(withIdentifiers: [scale.id]).first {
+        if let idStr = rec.peripheralId, let u = UUID(uuidString: idStr),
+           let p = central.retrievePeripherals(withIdentifiers: [u]).first {
             peripheral = p
             p.delegate = self
             central.connect(p)
+            stage = .connecting
         } else {
+            // No persisted peripheral id (older bind record, or iOS re-assigned
+            // identifiers) — scan and match the bound MAC at discovery time.
+            appendLog("scanning for bound scale \(rec.mac) …")
             startScan()
+            stage = .connecting
         }
     }
 
@@ -123,6 +133,7 @@ final class ScaleCentral: NSObject, ObservableObject {
         pairMachine = nil
         sessionMachine = nil
         flow = nil
+        pendingBind = nil
         stage = .idle
     }
 
@@ -189,8 +200,11 @@ final class ScaleCentral: NSObject, ObservableObject {
         guard notifiesEnabled.contains(GATT.notifyData),
               notifiesEnabled.contains(GATT.notifyAck) else { return }
 
+        // 2A26 may carry trailing NULs/whitespace — trim before the XOR-variant
+        // string comparison (and before persisting into the bind record).
         let fw = readResults[GATTPlus.firmwareRevision]
-            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+            .flatMap { String(data: $0, encoding: .utf8) }?
+            .trimmingCharacters(in: CharacterSet(charactersIn: " \t\r\n\0")) ?? ""
         let effectiveFw = fw.isEmpty ? "1.5.0.0" : fw   // XOR-variant default
         let mac = connectTarget?.mac
             ?? BindStore.shared.record?.mac
@@ -205,8 +219,24 @@ final class ScaleCentral: NSObject, ObservableObject {
             _ = m.handle(.connected)
             _ = m.handle(.servicesDiscovered)
             _ = m.handle(.notifyEnabled(characteristic: GATT.notifyData))
-            _ = m.handle(.notifyEnabled(characteristic: GATT.notifyAck))
+            var pairOut = m.handle(.notifyEnabled(characteristic: GATT.notifyAck))
+            // Host gates after the read phase (PairDriver parity — without these
+            // the machine parks in .readingDeviceInfo and nothing is ever sent):
+            if m.phase == .readingDeviceInfo {
+                let feat = readResults[GATT.featureInfo].map { [UInt8]($0) } ?? []
+                pairOut.actions += m.handle(.readResponse(
+                    characteristic: GATT.featureInfo, data: feat)).actions
+            }
+            if case .awaitingDeviceIdInput = m.phase {
+                // Fresh-scale path: 0x0001 register with deviceId = MAC hex
+                // (hardware-verified REPLICATION.md recipe).
+                pairOut.actions += m.setDeviceIdInput(A6Obfuscation.macHex(mac)).actions
+            }
+            if case .awaitingChallenge = m.phase {
+                appendLog("⏳ waiting for the scale's challenge — step on the scale now")
+            }
             pairMachine = m
+            performAll(pairOut.actions)
             appendLog("pair machine started (fw \(effectiveFw))")
         case .session(let slot, let arm):
             var m = SessionStateMachine(config: .init(
@@ -244,8 +274,11 @@ final class ScaleCentral: NSObject, ObservableObject {
     // MARK: - Watchdog (3 s ACK resend — decompiled constant)
 
     private func syncWatchdog() {
-        let pending = pairMachine?.queue.isWritePending ?? false
-            || sessionMachine?.queue.isWritePending ?? false
+        // Arm while a command is in flight — frames still to write OR waiting
+        // for the device ACK (3 s resend, BleHost.Watchdog.sync parity).
+        let pairPending = pairMachine.map { $0.queue.isWritePending || !$0.queue.isEmpty } ?? false
+        let sessionPending = sessionMachine.map { $0.queue.isWritePending || !$0.queue.isEmpty } ?? false
+        let pending = pairPending || sessionPending
         if pending, watchdog == nil {
             let t = DispatchSource.makeTimerSource(queue: watchdogQueue)
             t.schedule(deadline: .now() + 3.0)
@@ -283,13 +316,21 @@ final class ScaleCentral: NSObject, ObservableObject {
     private func dispatch(_ event: LinkEvent) {
         if pairMachine != nil {
             var m = pairMachine!
-            let out = m.handle(event)
+            var out = m.handle(event)
+            // Host decision gate (PairDriver parity): the machine parks in
+            // .awaitingBindConfirm until the host confirms — confirm immediately
+            // or the bind never completes (0x0003 bind notice is never sent).
+            if case .awaitingBindConfirm = m.phase {
+                out.actions += m.setBindConfirm(.pairingSuccess, slot: m.config.userSlot).actions
+            }
             pairMachine = m
             performAll(out.actions)
             if let bind = out.bindRecord {
                 BindStore.shared.record = .init(
                     deviceId: bind.deviceId, mac: bind.mac, slot: bind.slot,
-                    firmwareVersion: bind.firmwareVersion, boundAt: bind.boundAt)
+                    firmwareVersion: bind.firmwareVersion, boundAt: bind.boundAt,
+                    peripheralId: pendingBind?.scaleId.uuidString)
+                pendingBind = nil
                 stage = .paired
                 appendLog("BOUND ✓ deviceId \(bind.deviceId)")
             }
@@ -409,6 +450,23 @@ final class ScaleCentral: NSObject, ObservableObject {
         let bytes = [UInt8](d.suffix(6).reversed())
         return bytes.map { String(format: "%02X", $0) }.joined(separator: ":")
     }
+
+    /// Upsert into `foundScales` keyed by peripheral identifier (one row per
+    /// physical scale), keeping the best RSSI and freshest name. Insert sorted
+    /// strongest-signal-first.
+    private func upsertScanEntry(_ entry: DiscoveredScale) {
+        if let i = foundScales.firstIndex(where: { $0.id == entry.id }) {
+            let old = foundScales[i]
+            foundScales[i] = DiscoveredScale(
+                id: entry.id,
+                name: entry.name.isEmpty ? old.name : entry.name,
+                mac: entry.mac,
+                rssi: max(old.rssi, entry.rssi))
+        } else {
+            let pos = foundScales.firstIndex { $0.rssi < entry.rssi } ?? foundScales.count
+            foundScales.insert(entry, at: pos)
+        }
+    }
 }
 
 // MARK: - CBCentralManagerDelegate
@@ -427,8 +485,9 @@ extension ScaleCentral: CBCentralManagerDelegate {
         guard let mac = ScaleCentral.macFromMfg(mfg) else { return }
 
         // Active connect target (bind/session) — connect the moment we see it.
-        if let t = connectTarget, t.id == peripheral.identifier, flow != nil,
-           peripheral.state != .connected {
+        // Session fallback matches the bound MAC (peripheral id can be re-assigned).
+        if let t = connectTarget, flow != nil, peripheral.state != .connected,
+           t.id == peripheral.identifier || t.mac == mac {
             central.stopScan()
             self.peripheral = peripheral
             peripheral.delegate = self
@@ -437,7 +496,7 @@ extension ScaleCentral: CBCentralManagerDelegate {
         }
         let entry = DiscoveredScale(id: peripheral.identifier, name: name ?? "Scale",
                                     mac: mac, rssi: RSSI.intValue)
-        if !foundScales.contains(entry) { foundScales.append(entry) }
+        upsertScanEntry(entry)
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -455,6 +514,8 @@ extension ScaleCentral: CBCentralManagerDelegate {
         guard !disconnectRequested else { return }
         if case .handshaking = stage {
             stage = .failed("disconnected during handshake")
+        } else if stage == .connecting || stage == .scanning {
+            stage = .failed("disconnected before handshake")
         } else if stage != .paired {
             stage = .idle
         }

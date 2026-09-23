@@ -115,6 +115,9 @@ final class BindStore {
         var slot: Int
         var firmwareVersion: String
         var boundAt: Date
+        /// CBPeripheral.identifier from bind time — lets sessions reconnect via
+        /// retrievePeripherals(withIdentifiers:) without scanning.
+        var peripheralId: String?
     }
 
     static let shared = BindStore()

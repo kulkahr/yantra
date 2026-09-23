@@ -33,7 +33,7 @@
 		4FFC49DD7D4241049F1296E1 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		534E20EB1F414131FA182689 /* Views.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Views.swift; sourceTree = "<group>"; };
 		5D132951954B9A5EF6E1A34F /* ScaleCentral.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScaleCentral.swift; sourceTree = "<group>"; };
-		668B4901B03CB440509CA401 /* Firefly.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Firefly.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		668B4901B03CB440509CA401 /* Firefly.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Firefly.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		77807AEBFDB0B495E9CE0444 /* scalekit */ = {isa = PBXFileReference; lastKnownFileType = folder; name = scalekit; path = ../scalekit; sourceTree = SOURCE_ROOT; };
 		9FE6BDB7E4DA869C95689DD8 /* Firefly.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Firefly.entitlements; sourceTree = "<group>"; };
 		A2E4472A72B353B4A40C13C7 /* FireflyApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FireflyApp.swift; sourceTree = "<group>"; };
@@ -149,8 +149,6 @@
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
 				LastUpgradeCheck = 1430;
-				TargetAttributes = {
-				};
 			};
 			buildConfigurationList = 04A33972A78898AF92EDB211 /* Build configuration list for PBXProject "Firefly" */;
 			developmentRegion = en;
@@ -295,6 +293,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Firefly/Firefly.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 978WZV3883;
 				INFOPLIST_FILE = Firefly/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -387,6 +386,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Firefly/Firefly.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
+				DEVELOPMENT_TEAM = 978WZV3883;
 				INFOPLIST_FILE = Firefly/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

@@ -152,13 +152,16 @@ struct DeviceView: View {
             List {
                 Section("Bind record") {
                     if let rec = BindStore.shared.record {
+                        Label("Bound ✓", systemImage: "checkmark.seal.fill")
+                            .font(.headline).foregroundStyle(.green)
                         LabeledRow("DeviceId", rec.deviceId)
                         LabeledRow("MAC", rec.mac)
                         LabeledRow("Slot", "\(rec.slot)")
                         LabeledRow("Firmware", rec.firmwareVersion)
                         LabeledRow("Bound", rec.boundAt.formatted(date: .abbreviated, time: .shortened))
                     } else {
-                        Text("No scale bound yet").foregroundStyle(.secondary)
+                        Label("No scale bound yet", systemImage: "link.badge.plus")
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Section("Profile (SRD-005 — pushed at session start)") {
@@ -196,6 +199,7 @@ struct DeviceView: View {
                             Spacer()
                             Button("Bind") { central.bind(s, slot: slot) }
                                 .buttonStyle(.borderedProminent)
+                                .disabled(central.stage == .connecting || central.stage == .handshaking)
                         }
                     }
                     if central.foundScales.isEmpty, central.stage == .scanning {
@@ -205,8 +209,11 @@ struct DeviceView: View {
                 Section("Session") {
                     if let rec = BindStore.shared.record {
                         Button("Start weigh-in session") {
+                            // Reconnect via the bind-time peripheral id; the
+                            // central falls back to MAC-matched scan when nil.
                             let scale = ScaleCentral.DiscoveredScale(
-                                id: UUID(), name: "Scale", mac: rec.mac, rssi: 0)
+                                id: rec.peripheralId.flatMap { UUID(uuidString: $0) } ?? UUID(),
+                                name: "Scale", mac: rec.mac, rssi: 0)
                             central.startSession(with: scale)
                         }
                         .disabled(central.stage == .connecting || central.stage == .handshaking)

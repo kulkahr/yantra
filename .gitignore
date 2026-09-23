@@ -5,3 +5,6 @@ scalekit/.build/*
 .freebuff/*
 
 analysis/captures/*
+
+ios/Firefly.xcodeproj/project.xcworkspace/*
+ios/Firefly.xcodeproj/xcuserdata/*

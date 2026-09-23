@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:realme-scale-re}/scalekit",
+            "name": "Debug a6host (scalekit)",
+            "target": "a6host",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug a6host (scalekit)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:realme-scale-re}/scalekit",
+            "name": "Release a6host (scalekit)",
+            "target": "a6host",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release a6host (scalekit)"
+        }
+    ]
+}

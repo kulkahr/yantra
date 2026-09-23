@@ -431,12 +431,13 @@ final class BleHost: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     /// Foundation UUID → CBUUID.
     private func cb(_ u: UUID) -> CBUUID { CBUUID(nsuuid: u) }
 
-    /// MAC from advertisement manufacturer data: trailing 6 bytes
-    /// (TDD §6: `12 34 56 78 01 31 06 1b cb 0b d8`).
+    /// MAC from advertisement manufacturer data: trailing 6 bytes **reversed**
+    /// (TDD §6: `12 34 56 78 01 31 06 1b cb 0b d8` → D8:0B:CB:1B:06:31;
+    /// wire fact #1 in REPLICATION.md — same rule as ScaleCentral.macFromMfg).
     static func macFromMfg(_ mfg: Data?) -> String? {
         guard let m = mfg, m.count >= 11 else { return nil }
-        let bytes = m.suffix(6).map { String(format: "%02X", $0) }
-        return bytes.joined(separator: ":")
+        let bytes = [UInt8](m.suffix(6).reversed())
+        return bytes.map { String(format: "%02X", $0) }.joined(separator: ":")
     }
 
     func shortName(_ uuid: UUID) -> String {
