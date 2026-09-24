@@ -1,7 +1,8 @@
 # Open Issues
 
-> **Status 2026-09-23 (evening):** issues #1–#16 all FIXED ✅ and verified (ScaleKit
-> `swift test` 72/72 · Firefly/Yantra `BUILD SUCCEEDED` zero warnings · YantraTests green).
+> **Status 2026-09-24:** issues #1–#50 and #60 all FIXED ✅ and verified (ScaleKit
+> `swift test` 108/108 · Yantra `BUILD SUCCEEDED` zero warnings · YantraTests green ·
+> installed on the iPhone 14 Plus for on-device retest).
 > SRD-010 (Watch Integration) is now IMPLEMENTED for the boAt Storm Call 3 — see the
 > post-#16 entry. New issues go below the existing entries as `## 17. …`.
 
@@ -600,3 +601,107 @@ observed stream proves the watch wins). Fixes:
   **is** the HR-history cmd id (`HISTORY_DATA_AUTOMATIC_HR_BP_INTERVAL`), and
   interval writes use `{01 02 05 00 <minutes>}` — sending it before a history
   request just collided with the same command slot.
+
+## 46. When i change watch active face values in the app the watch gets update but the app still shows old value. — FIXED ✅
+
+Two bugs:
+
+1. **Ack never routed** — the watch answers a `02 8F` switch with `82 8F` and
+   payload[0] = 1 (`SetCurrentWatchFaceRes.isSuccess` parity), but `handleFrame`
+   had no case for it, and `deliverHistoryData` had no `.watchFaceSet` decoder.
+   The selection only ever updated from the separate `02 0F` current-face read.
+2. **Face-list decode read the wrong offset** — `GetWatchFaceListRes.getData`
+   reads a u16 LE from frame bytes 4..5 = **payload[0..1]**; we started at
+   payload[1], shifting every id.
+
+Fix: `switchWatchFace` now queues the command with a `.watchFaceSet(id:)` ack;
+the id is applied to `currentWatchFaceId` only after the watch confirms (or the
+ack arrives through the `0x7F` assembler). Face list decodes from payload[0].
+
+## 47. Frimware in the app still shows blank. — FIXED ✅
+
+`asciiString` (UTF-8 decode → trim whitespace) returned nil for payloads that
+carry **NUL padding** (`"1.4.0.42\0…"`): `\0` is neither whitespace nor invalid
+UTF-8, so the string decoded but the trim left `\0`-prefixed garbage — and the
+GATT `0x2A26` path trimmed `.whitespacesAndNewlines`, which does not include
+NUL either, leaving a blank-looking value.
+
+Fix: both paths (info response + GATT read) strip NUL bytes explicitly before
+the printable-subset/hex fallbacks; the value is also echoed to the log
+(`firmware = …`) so a blank field is now impossible to miss.
+
+## 48. watch shows 4 hours 48min of sleep data but app doesnot show any data. — FIXED ✅
+
+**Root cause (decompiled `SleepDataReq` + `BleUUID`):** the official app requests
+**1-minute sleep** — `GET_1MIN_SLEEP_DATA = {1, 12, 7, 0}` (cmd `0x01 0x0C`),
+15 bytes/hour, 60 values × 1 min — as its default. We requested the legacy
+**10-min** variant (`0x01 0x08`), which this firmware answers with a payload
+our 6-bytes-per-hour decoder read as a partial hour → zero rows.
+
+Fix: `requestSleepHistory1Min` (cmd `0x0C`) is now what `loadSleepAndSpo2History`
+sends; `decodeSleepHistory` takes an explicit `bytesPerHour` (15 = 1-min layout,
+6 = legacy 10-min, auto-detected from the stream length on receipt). Crest parity
+stage semantics unchanged (2-bit values, 0 awake / 1 light / 2 deep / 3 REM).
+
+## 49. Starting sport in app does nothing… — FIXED ✅ (capability, not a bug)
+
+The log was telling the truth: the watch refuses `01 8B`. Decompiled ground
+truth — `StormCall3BleApiImpl` sets
+`deviceSupportedFeatures.setSportModeSupportedFromApp(false)`: **the Storm Call 3
+does not support app-started workouts at all.** The official app never sends the
+command to this model (its `b()` even resets any stray mode with an all-zero
+`SportModeRequest`), so no retry can ever succeed.
+
+Fix: the refusal is now surfaced once — `sportStartUnsupported` flips true, the
+stop-then-start retry is gone, the UI replaces the start-workout menu with
+“Workouts start on the watch”, and the flag persists across reconnects (device
+capability, not link state). Workout summaries (`01 23`) still pull normally for
+watch-started sessions.
+
+## 50. There is no option to sync mobile contact list with watch. — IMPLEMENTED ✅
+
+Byte-for-byte `SetPhoneBookReq` parity (`00 A8`):
+
+- payload = **count byte** + per contact `name UTF-8 ≤ 20 B, NUL, number UTF-8
+  ≤ 20 B, NUL` (spaces stripped from numbers, both fields hard-clamped at 20
+  bytes exactly like the decompiled builder).
+- > 150 bytes → **0x7F multipacket request stream**: start packet
+  `[7F crcLo crcHi seq=0, count, crcLo crcHi, class, cmd, lenLo lenHi data…]` +
+  146-byte continuations `[7F crcLo crcHi seqLo seqHi chunk…]`, CRC16 over the
+  payload per `MultiPacketRequestGenerator.crc16` (rotate + XOR chain, ported
+  and pinned with a hand-traced vector).
+- `ContactsSection` in `WatchView` pulls ContactsKit (given+family name, first
+  phone number), lets you pick how many (1–30), and pushes through the command
+  queue (ack `.phoneBook` = `80 A8`). Requires the Contacts permission
+  (`NSContactsUsageDescription` added to Info.plist).
+
+## 60. The app is missing the watch navigation map update feature. — IMPLEMENTED ✅
+
+Reverse-engineered from `CoveNavigationService` + `SetNavigationEventReq` /
+`SetNavigationStatusReq` (the navigation feature lives on the same Leonardo
+protocol family):
+
+- **Start/turn event** — `02 8A` frame: `0x41` marker byte (the request-prefix
+  byte from `generateSinglePacketRequest(2, -90, data, {65})`) + `1` (isStart)
+  + `len` + source UTF-16LE + `len` + destination UTF-16LE + mode byte
+  (strings ≤ 60 UTF-16 units = the decompiled 120-byte cap; mode: walking = 0,
+  driving/biking = 1 — `CoveNavigationService.setNavigationStartOrStopOnBand`).
+- **Stop** — `02 8A` + bare mode byte `2` (`SetNavigationEventReq.a()`
+  else-branch); **status** — `00 B4` + status byte (2 = navigating,
+  0 = stop/error path, matching the callers).
+- **UI** — Navigation section on the watch screen: destination + driving/
+  walking picker → start (event + status 2), per-turn “Update” with remaining
+  meters, and Stop. All commands flow the strict queue with dedicated acks
+  (`.navigationEvent` / `.navigationStatus`).
+
+**Verification:** ScaleKit `swift test` 108/108 (+6 new: 1-min sleep layout,
+1-min request frame, phone-book single/multipacket, CRC16 vector, navigation
+event/stop/status, UTF-16 clamp, watch-face list offset) · Yantra
+`xcodebuild build` zero warnings · `YantraTests` TEST SUCCEEDED · app installed
+on the connected iPhone 14 Plus for on-watch retest.
+
+**On-device retest:** connect the watch → Sleep section should now fill (pull
+Today) · watch-face switch updates the picker immediately · Firmware shows the
+version (or the raw hex in the log) · Start workout explains the watch-side
+limit · Sync contacts → check the watch's phone book · Start navigation → the
+watch shows the destination card.

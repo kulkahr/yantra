@@ -195,11 +195,11 @@ final class KahaProtocolTests: XCTestCase {
     }
 
     func testSleepHistoryDecodeStages() {
-        // One hour = 6 bytes = 24 values of 2.5 min.
+        // One hour = 6 bytes = 24 values of 2.5 min (10-min window layout).
         // Byte 0b01_00_10_01 = light(1), deep(2), awake(0), light(1).
         var payload: [UInt8] = [0b01_00_10_01]          // 2.5: light, deep, awake, light
         payload.append(contentsOf: repeatElement(0b01_01_01_01, count: 5))  // all light
-        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 22)
+        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 22, bytesPerHour: 6)
         XCTAssertEqual(hours.count, 1)
         let h = hours[0]
         XCTAssertEqual(h.hour, 22)
@@ -211,10 +211,36 @@ final class KahaProtocolTests: XCTestCase {
         XCTAssertEqual(h.totalSleepMinutes, 57.5, accuracy: 0.001)
     }
 
+    func testSleepHistory1MinLayout() {
+        // #48: 1-min data = 15 bytes/hour, 60 values of 1 min. One full hour
+        // all-deep (0b10) + one byte light → 60 min deep in hour 22.
+        var payload = [UInt8](repeating: 0b10_10_10_10, count: 15)
+        payload.append(0b01_01_01_01)  // 4 min light → hour 23 (partial hour dropped)
+        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 22)
+        XCTAssertEqual(hours.count, 1, "15 bytes = exactly one hour; the 16th byte is a partial hour")
+        XCTAssertEqual(hours[0].deepMinutes, 60, accuracy: 0.001)
+        XCTAssertEqual(hours[0].hour, 22)
+        XCTAssertEqual(hours[0].lightMinutes, 0, accuracy: 0.001)
+        // Two full hours decode when the stream carries 30 bytes.
+        let twoHours = KahaProtocol.decodeSleepHistory(
+            [UInt8](repeating: 0b01_01_01_01, count: 30), startHour: 23)
+        XCTAssertEqual(twoHours.count, 2)
+        XCTAssertEqual(twoHours[0].hour, 23)
+        XCTAssertEqual(twoHours[1].hour, 0)
+        XCTAssertEqual(twoHours[1].lightMinutes, 60, accuracy: 0.001)
+    }
+
+    func testSleepRequest1MinFrame() {
+        // GET_1MIN_SLEEP_DATA = {1, 12, 7, 0} + day/startHour/endHour —
+        // the request the official app actually sends (SleepDataReq default).
+        XCTAssertEqual(KahaProtocol.requestSleepHistory1Min(day: 0, startHour: 0, endHour: 23),
+                       [0x01, 0x0C, 0x07, 0x00, 0x00, 0x00, 0x17])
+    }
+
     func testSleepHistoryMultipleHoursAndWrap() {
         // 2 full hours starting at 23 → hours 23, 0 (midnight wrap).
         let payload = [UInt8](repeating: 0b10_10_10_10, count: 12)  // all deep
-        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 23)
+        let hours = KahaProtocol.decodeSleepHistory(payload, startHour: 23, bytesPerHour: 6)
         XCTAssertEqual(hours.count, 2)
         XCTAssertEqual(hours[0].hour, 23)
         XCTAssertEqual(hours[1].hour, 0)
@@ -224,7 +250,8 @@ final class KahaProtocolTests: XCTestCase {
     func testSleepHistoryTrailingPartialByteDropped() {
         // 7 bytes → only the first full hour (6 bytes) decodes.
         let payload = [UInt8](repeating: 0x55, count: 7)
-        XCTAssertEqual(KahaProtocol.decodeSleepHistory(payload, startHour: 0).count, 1)
+        XCTAssertEqual(KahaProtocol.decodeSleepHistory(payload, startHour: 0,
+                                                       bytesPerHour: 6).count, 1)
     }
 
     // MARK: - SpO2 history (Spo2PeriodicDataRes layout)
@@ -268,6 +295,15 @@ final class KahaProtocolTests: XCTestCase {
         XCTAssertEqual(KahaProtocol.ClassId.responseFitness, 0x81)
         XCTAssertEqual(KahaProtocol.ClassId.responseAlerts, 0x82)
         XCTAssertEqual(KahaProtocol.ClassId.responseInfo, 0x80)
+    }
+
+    func testWatchFaceListDecodesFromPayloadStart() {
+        // #46: GetWatchFaceListRes reads u16 pairs from payload[0] (frame
+        // byte 4), not payload[1].
+        XCTAssertEqual(KahaProtocol.decodeWatchFaceList([0x00, 0x00, 0x01, 0x00, 0x02, 0x00]),
+                       [0, 1, 2])
+        XCTAssertEqual(KahaProtocol.decodeWatchFaceList([]), [])
+        XCTAssertEqual(KahaProtocol.decodeWatchFaceList([0x05]), [])
     }
 
     func testMultipacketStartPacketDetection() {
@@ -405,6 +441,83 @@ final class KahaProtocolTests: XCTestCase {
         let frames = KahaProtocol.sendMessage(long, type: 18)
         XCTAssertEqual(frames.first?.first, 0x7F, "long messages start with the 0x7F header")
         XCTAssertEqual(frames.count > 1, true)
+    }
+
+    // MARK: - Phone book (#50)
+
+    func testPhoneBookSinglePacket() {
+        // 2 contacts fit in one packet: count + name+NUL + number+NUL each.
+        let frames = KahaProtocol.phoneBook([("Amy", "+911234567890"), ("Bo", "109")])
+        XCTAssertEqual(frames.count, 1)
+        let f = KahaProtocol.parse(frames[0])!
+        XCTAssertEqual(f.classId, 0x00)
+        XCTAssertEqual(f.cmdId, 0xA8)
+        var p = f.payload
+        XCTAssertEqual(p.removeFirst(), 2, "contact count byte")
+        var out: [String] = []
+        var cur: [UInt8] = []
+        for b in p {
+            if b == 0 { out.append(String(bytes: cur, encoding: .utf8)!); cur = [] }
+            else { cur.append(b) }
+        }
+        XCTAssertEqual(out, ["Amy", "+911234567890", "Bo", "109"])
+    }
+
+    func testPhoneBookMultipacketAndNameClamp() {
+        // 20 contacts × ~30 bytes > 150 → 0x7F stream; names clamp to 20 bytes.
+        let contacts = (0..<20).map { (name: String(repeating: "N", count: 30) + "\($0)",
+                                       number: "1234567890\($0)") }
+        let frames = KahaProtocol.phoneBook(contacts)
+        XCTAssertEqual(frames.first?.first, 0x7F, "oversized payload starts a 0x7F stream")
+        XCTAssertEqual(frames.count > 1, true)
+    }
+
+    func testCRC16MatchesDecompiledVector() {
+        // Hand-traced through the decompiled Java chain for [0x41]:
+        // i2 = 0x41; i3 = 0x41 ^ 0x04 = 0x45; i4 = 0x45 ^ 0x5000 = 0x5045;
+        // i = 0x5045 ^ 0x08A0 = 0x58E5.
+        XCTAssertEqual(KahaProtocol.crc16([]), 0)
+        XCTAssertEqual(KahaProtocol.crc16([0x00]), 0)
+        XCTAssertEqual(KahaProtocol.crc16([0x41]), 0x58E5)
+    }
+
+    // MARK: - Navigation (#60)
+
+    func testNavigationEventFrame() {
+        // Driving: mode byte 1; strings UTF-16LE with 16-bit length prefixes.
+        let f = KahaProtocol.parse(KahaProtocol.navigationEvent(
+            source: "Current Location", destination: "Home", mode: .vehicle))!
+        XCTAssertEqual(f.classId, 0x02)
+        XCTAssertEqual(f.cmdId, 0x8A)
+        XCTAssertEqual(f.payload.first, 0x41, "marker byte from generateSinglePacketRequest")
+        XCTAssertEqual(f.payload[1], 1, "isStart")
+        let srcLen = Int(f.payload[2])
+        XCTAssertEqual(String(data: Data(f.payload[3..<(3 + srcLen)]), encoding: .utf16LittleEndian),
+                       "Current Location")
+        let dstLen = Int(f.payload[3 + srcLen])
+        XCTAssertEqual(String(data: Data(f.payload[(4 + srcLen)..<(4 + srcLen + dstLen)]),
+                              encoding: .utf16LittleEndian), "Home")
+        XCTAssertEqual(f.payload.last, 1, "driving/biking mode = 1")
+        // Walking → mode byte 0.
+        let walk = KahaProtocol.parse(KahaProtocol.navigationEvent(
+            source: "A", destination: "B", mode: .walking))!
+        XCTAssertEqual(walk.payload.last, 0)
+    }
+
+    func testNavigationStopAndStatus() {
+        // event=false → bare mode byte 2 (decompiled a() else-branch).
+        XCTAssertEqual(KahaProtocol.navigationStop(), [0x02, 0x8A, 0x05, 0x00, 2])
+        // CoveNavigationService status: 2 = navigating, 0 = stop/error path.
+        XCTAssertEqual(KahaProtocol.navigationStatus(2), [0x00, 0xB4, 0x05, 0x00, 2])
+    }
+
+    func testNavigationEventUTF16Clamp() {
+        // Strings longer than 60 UTF-16 units are clamped (120-byte wire cap).
+        let long = String(repeating: "z", count: 200)
+        let f = KahaProtocol.parse(KahaProtocol.navigationEvent(
+            source: long, destination: long, mode: .vehicle))!
+        // marker + isStart + len + 120 + len + 120 + mode = 245.
+        XCTAssertEqual(f.payload.count, 245)
     }
 
     func testWatchControlDecode() {

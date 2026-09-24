@@ -63,6 +63,8 @@ public enum KahaProtocol {
         public static let hrBpInterval: UInt8 = 0x02    // set auto-measure interval / request history
         public static let latestHealth: UInt8 = 0x0A    // payload byte: 0 HR, 1 SpO2, 2 temp, 3 BP
         public static let sleepHistory: UInt8 = 0x08    // 10-min sleep data (GET_10MIN_SLEEP_DATA)
+        public static let sleepHistory1Min: UInt8 = 0x0C // 1-min sleep data (GET_1MIN_SLEEP_DATA) —
+                                                        // the official app's default request (#48)
         public static let spo2History: UInt8 = 0x26     // periodic SpO2 (GET_SPO2_PERIODIC)
         public static let todaysFitness: UInt8 = 0x2F
         public static let currentSportMode: UInt8 = 0x8B // start/stop sport session (SET_CURRENT_SPORT_MODE)
@@ -147,6 +149,15 @@ public enum KahaProtocol {
     /// (`GET_10MIN_SLEEP_DATA` + `RequestPayload` day/hours, per `SleepDataReq`).
     public static func requestSleepHistory(day: Int, startHour: Int, endHour: Int) -> [UInt8] {
         frame(classId: ClassId.fitness, cmdId: FitnessCmd.sleepHistory,
+              payload: [UInt8(day), UInt8(startHour), UInt8(endHour)])
+    }
+
+    /// `0x01 0x0C` 1-min sleep history — `day startHour endHour`.
+    /// This is what the official app actually sends: `SleepDataReq` builds
+    /// `GET_1MIN_SLEEP_DATA` by default (BleUUID `{1, 12, 7, 0}`) — the 10-min
+    /// variant is the legacy path (#48: our 10-min request got no usable data).
+    public static func requestSleepHistory1Min(day: Int, startHour: Int, endHour: Int) -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.sleepHistory1Min,
               payload: [UInt8(day), UInt8(startHour), UInt8(endHour)])
     }
 
@@ -383,15 +394,17 @@ public enum KahaProtocol {
         public var totalSleepMinutes: Double { lightMinutes + deepMinutes + remMinutes }
     }
 
-    /// Decodes 10-min sleep history (`0x01 0x08` response).
+    /// Decodes 1-min or 10-min sleep history (`0x01 0x0C` / `0x01 0x08` responses).
     ///
-    /// Wire layout (SleepDataRes): 6 bytes per hour starting at `startHour`;
-    /// each byte packs FOUR 2-bit stage values of 2.5 min each (4 × 2.5 = the
-    /// byte's 10-minute window). Aggregates into per-hour stage minutes.
-    public static func decodeSleepHistory(_ payload: [UInt8], startHour: Int) -> [SleepHour] {
-        let bytesPerHour = 6
-        let valuesPerByte = 4
-        let minutesPerValue = 10.0 / Double(valuesPerByte)
+    /// Wire layout (SleepDataRes): each byte packs FOUR 2-bit stage values,
+    /// starting at `startHour`. `bytesPerHour` selects the layout: 15 for
+    /// 1-min data (60 values × 1 min — the official app's default request,
+    /// #48) or 6 for the legacy 10-min data (24 values × 2.5 min). Aggregates
+    /// into per-hour stage minutes.
+    public static func decodeSleepHistory(_ payload: [UInt8], startHour: Int,
+                                          bytesPerHour: Int = 15) -> [SleepHour] {
+        guard bytesPerHour > 0 else { return [] }
+        let minutesPerValue = 60.0 / Double(bytesPerHour * 4)
         var out: [SleepHour] = []
         var offset = 0
         var hour = startHour
@@ -655,12 +668,12 @@ public enum KahaProtocol {
               payload: [UInt8(id & 0xFF), UInt8((id >> 8) & 0xFF)])
     }
 
-    /// Watch-face list response: LE uint16 ids at every other byte
-    /// (`GetWatchFaceListRes` reads pairs starting at payload[1]).
+    /// Watch-face list response `82 0D`: LE uint16 id pairs starting at
+    /// payload[0] (`GetWatchFaceListRes.getData` = u16 at frame bytes 4..5,
+    /// i.e. payload[0..1]). The old payload[1..] start misparsed ids (#46).
     public static func decodeWatchFaceList(_ payload: [UInt8]) -> [Int] {
-        guard payload.count >= 2 else { return [] }
         var out: [Int] = []
-        var i = 1
+        var i = 0
         while i + 1 < payload.count {
             out.append(Int(payload[i]) | (Int(payload[i + 1]) << 8))
             i += 2
@@ -712,6 +725,151 @@ public enum KahaProtocol {
     public static func decodeSportAck(_ payload: [UInt8]) -> Bool? {
         guard let first = payload.first else { return nil }
         return first == 1
+    }
+
+    /// Sport-mode ack that separates "refused (payload[0] = 0)" from other
+    /// shapes. The watch answers `81 8B 05 00 00` when it does not accept the
+    /// mode — for the Storm Call 3 this is EXPECTED: the official app marks
+    /// the device `sportModeSupportedFromApp = false` (StormCall3BleApiImpl)
+    /// and never sends `01 8B` to it, so a refusal is a capability limit, not
+    /// a transient race (#49).
+    public static func decodeSetSportAck(_ payload: [UInt8]) -> Bool? {
+        decodeSportAck(payload)
+    }
+
+    // MARK: - Phone book (SetPhoneBookReq, #50)
+
+    /// Syncs contacts to the watch: `00 A8` + count byte + per contact
+    /// `name UTF-8 ≤ 20 bytes NUL number UTF-8 ≤ 20 bytes NUL`.
+    /// Longer than 150 total bytes → 0x7F multipacket stream (CRC16-protected),
+    /// byte-for-byte the decompiled MultiPacketRequestGenerator output.
+    public static func phoneBook(_ contacts: [(name: String, number: String)]) -> [[UInt8]] {
+        precondition(contacts.count <= 0xFF, "watch accepts a single count byte")
+        var data: [UInt8] = [UInt8(contacts.count)]
+        for c in contacts {
+            var name = Array(c.name.utf8)
+            if name.count >= 20 { name = Array(name.prefix(20)) }
+            var number = Array(c.number.replacingOccurrences(of: " ", with: "").utf8)
+            if number.count >= 20 { number = Array(number.prefix(20)) }
+            data.append(contentsOf: name)
+            data.append(0)
+            data.append(contentsOf: number)
+            data.append(0)
+        }
+        return multipacketRequest(classId: ClassId.info, cmdId: 0xA8, data: data, marker: nil)
+    }
+
+    /// Phone-book set ack `80 A8` (SetPhoneBookRes): any payload = accepted;
+    /// routed by in-flight command just like other 80-class settings acks.
+    public static func decodePhoneBookAck(_ payload: [UInt8]) -> Bool {
+        true
+    }
+
+    // MARK: - Navigation (SetNavigationEventReq / SetNavigationStatusReq, #60)
+
+    /// Navigation trip mode (`CoveNavigationService.setNavigationStartOrStopOnBand`:
+    /// walking → 0, driving/biking → 1).
+    public enum NavigationMode {
+        case walking
+        case vehicle
+    }
+
+    /// Navigation event to the watch: `02 8A` frame — the `0x41` marker byte
+    /// rides the request prefix (`generateSinglePacketRequest(2, -90, data,
+    /// {65})`), then `1` (isStart) + `len` + source UTF-16LE + `len` +
+    /// destination UTF-16LE + mode byte (each ≤ 60 UTF-16 units = 120 bytes,
+    /// decompiled `SetNavigationEventReq.a()`).
+    public static func navigationEvent(source: String, destination: String,
+                                       mode: NavigationMode) -> [UInt8] {
+        func utf16le(_ s: String) -> [UInt8] {
+            var b: [UInt8] = []
+            for u in s.prefix(60).utf16 {
+                b.append(UInt8(u & 0xFF))
+                b.append(UInt8((u >> 8) & 0xFF))
+            }
+            return b
+        }
+        let src = utf16le(source)
+        let dst = utf16le(destination)
+        var payload: [UInt8] = [0x41, 1, UInt8(src.count)]
+        payload.append(contentsOf: src)
+        payload.append(UInt8(dst.count))
+        payload.append(contentsOf: dst)
+        payload.append(mode == .walking ? 0 : 1)
+        return frame(classId: ClassId.alerts, cmdId: 0x8A, payload: payload)
+    }
+
+    /// Stop navigation — `SetNavigationEventReq(event=false)` sends the bare
+    /// mode byte `2` (decompiled `a()` else-branch).
+    public static func navigationStop() -> [UInt8] {
+        frame(classId: ClassId.alerts, cmdId: 0x8A, payload: [2])
+    }
+
+    /// Navigation status `00 B4` + status byte
+    /// (CoveNavigationService: 0 = error/stop path, 2 = navigating).
+    public static func navigationStatus(_ status: Int) -> [UInt8] {
+        frame(classId: ClassId.info, cmdId: 0xB4, payload: [UInt8(clamping: status)])
+    }
+
+    // MARK: - 0x7F request multipacket (MultiPacketRequestGenerator parity)
+
+    /// Builds a request stream over the 0x7F channel: start packet
+    /// `[7F crcLo crcHi seqLo seqHi countLo countHi crcLo crcHi class cmd
+    /// lenLo lenHi (marker) data…]`, continuations `[7F crcLo crcHi seqLo
+    /// seqHi chunk…]`. Byte-identical to the decompiled generator's output
+    /// for ≤ 150-byte first packets.
+    public static func multipacketRequest(classId: UInt8, cmdId: UInt8,
+                                          data: [UInt8], marker: UInt8?) -> [[UInt8]] {
+        let crc = crc16(data)
+        let firstCapacity = 150 - 12 - (marker != nil ? 1 : 0)
+        guard data.count > firstCapacity else {
+            // Single packet: [class cmd lenLo lenHi (marker) data…] — the len
+            // field is the TOTAL frame length like every other command.
+            var f = frame(classId: classId, cmdId: cmdId)
+            if let m = marker { f.append(m) }
+            f.append(contentsOf: data)
+            f[2] = UInt8(f.count & 0xFF)
+            f[3] = UInt8((f.count >> 8) & 0xFF)
+            return [f]
+        }
+        let packets = Int(ceil(Double(data.count) / 146.0))
+        var frames: [[UInt8]] = []
+        var offset = 0
+        for seq in 0..<packets {
+            if seq == 0 {
+                var head: [UInt8] = [0x7F, UInt8(crc & 0xFF), UInt8((crc >> 8) & 0xFF),
+                                     0, 0, UInt8(packets & 0xFF), UInt8((packets >> 8) & 0xFF),
+                                     UInt8(crc & 0xFF), UInt8((crc >> 8) & 0xFF),
+                                     classId, cmdId,
+                                     UInt8(data.count & 0xFF), UInt8((data.count >> 8) & 0xFF)]
+                if let m = marker { head.append(m) }
+                let chunk = Array(data.prefix(firstCapacity))
+                head.append(contentsOf: chunk)
+                frames.append(head)
+                offset = firstCapacity
+            } else {
+                let end = min(offset + 146, data.count)
+                var f: [UInt8] = [0x7F, UInt8(crc & 0xFF), UInt8((crc >> 8) & 0xFF),
+                                  UInt8(seq & 0xFF), UInt8((seq >> 8) & 0xFF)]
+                f.append(contentsOf: data[offset..<end])
+                frames.append(f)
+                offset = end
+            }
+        }
+        return frames
+    }
+
+    /// CRC16 over the payload bytes — byte-for-byte the decompiled
+    /// `MultiPacketRequestGenerator.crc16` (16-bit rotate + XOR chain).
+    public static func crc16(_ bytes: [UInt8]) -> UInt16 {
+        var i: UInt16 = 0
+        for b in bytes {
+            let i2 = ((i << 8) | (i >> 8)) ^ UInt16(b)
+            let i3 = i2 ^ ((i2 & 0xFF) >> 4)
+            let i4 = i3 ^ ((i3 << 12) & 0xFFFF)
+            i = i4 ^ (((i4 & 0xFF) << 5) & 0xFFFF)
+        }
+        return i
     }
 
     // MARK: - Helpers

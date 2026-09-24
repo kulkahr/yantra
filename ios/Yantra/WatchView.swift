@@ -1,4 +1,5 @@
 import SwiftUI
+import Contacts
 import ScaleKit
 
 /// SRD-010 — the watch driver's feature UI: pairing, live rings (HR/steps),
@@ -23,7 +24,9 @@ struct WatchView: View {
                 spo2Section
                 workoutsSection
                 watchFaceSection
+                navigationSection
                 controlsSection
+                contactsSection
                 storedSection
                 deviceSection
             }
@@ -47,6 +50,12 @@ struct WatchView: View {
     @State private var cameraActive = false
     @State private var findingWatch = false
     @State private var exportStatus: String?
+    @State private var navDestination = ""
+    @State private var navDistance = ""
+    @State private var navMode: KahaProtocol.NavigationMode = .vehicle
+    @State private var navActive = false
+    @State private var contactStatus: String?
+    @State private var contactCount = 10
 
     // MARK: Sections
 
@@ -259,6 +268,12 @@ struct WatchView: View {
                 Button("End workout", role: .destructive) { watch.endWorkout() }
                 Text("Ending from the watch itself is fine — the app pulls the summary either way.")
                     .font(.caption2).foregroundStyle(.secondary)
+            } else if watch.sportStartUnsupported {
+                // #49: the firmware refuses `01 8B` (official app marks this
+                // model sportModeSupportedFromApp = false) — start on the watch.
+                Label("Workouts start on the watch — this model doesn't accept app-started sessions.",
+                      systemImage: "figure.run")
+                    .font(.caption).foregroundStyle(.secondary)
             } else {
                 Menu("Start workout on watch") {
                     ForEach([
@@ -324,6 +339,96 @@ struct WatchView: View {
             get: { watch.currentWatchFaceId ?? watch.watchFaceIds.first },
             set: { if let id = $0 { watch.switchWatchFace(id) } }
         )
+    }
+
+    /// #60: turn-by-turn navigation push to the watch (Crest parity —
+    /// `02 8A` event frames + `00 B4` status, mode driving/biking = 1).
+    private var navigationSection: some View {
+        Section {
+            if navActive {
+                HStack {
+                    Image(systemName: "location.fill").foregroundStyle(.blue)
+                    VStack(alignment: .leading) {
+                        Text(navDestination.isEmpty ? "Navigating" : navDestination)
+                        Text("\(navMode == .walking ? "Walking" : "Driving") · tap update to push each turn")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Stop") { watch.stopNavigation(); navActive = false }
+                        .buttonStyle(.borderedProminent)
+                }
+                HStack {
+                    TextField("Remaining distance (m)", text: $navDistance)
+                        .keyboardType(.numberPad)
+                    Button("Update") {
+                        if let d = Int(navDistance) {
+                            watch.updateNavigation(destination: navDestination,
+                                                   remainingMeters: d, mode: navMode)
+                        }
+                    }
+                    .disabled(Int(navDistance) == nil)
+                }
+            } else {
+                TextField("Destination…", text: $navDestination)
+                Picker("Mode", selection: $navMode) {
+                    Text("Driving").tag(KahaProtocol.NavigationMode.vehicle)
+                    Text("Walking").tag(KahaProtocol.NavigationMode.walking)
+                }
+                .pickerStyle(.segmented)
+                Button {
+                    watch.startNavigation(destination: navDestination, mode: navMode)
+                    navActive = true
+                } label: {
+                    Label("Start navigation on watch", systemImage: "location.navigating.fill")
+                }
+                .disabled(navDestination.isEmpty)
+            }
+        } header: {
+            Text("Navigation (#60)")
+        } footer: {
+            Text("Mirrors the official app: the watch shows the destination card and turn distance while the phone navigates.")
+        }
+    }
+
+    /// #50: pushes ContactsKit entries to the watch (SetPhoneBookReq parity).
+    private var contactsSection: some View {
+        Section {
+            Stepper("Contacts to sync: \(contactCount)", value: $contactCount, in: 1...30)
+            Button {
+                let granted = CNContactStore.authorizationStatus(for: .contacts) == .authorized
+                guard granted else {
+                    contactStatus = "Contacts permission not granted — enable it in Settings."
+                    return
+                }
+                let store = CNContactStore()
+                let keys = [CNContactGivenNameKey, CNContactFamilyNameKey,
+                            CNContactPhoneNumbersKey] as [CNKeyDescriptor]
+                let req = CNContactFetchRequest(keysToFetch: keys)
+                var found: [(name: String, number: String)] = []
+                try? store.enumerateContacts(with: req) { c, _ in
+                    guard let num = c.phoneNumbers.first?.value.stringValue else { return }
+                    let name = [c.givenName, c.familyName].filter { !$0.isEmpty }.joined(separator: " ")
+                    guard !name.isEmpty else { return }
+                    found.append((name, num))
+                }
+                let picked = Array(found.prefix(contactCount))
+                guard !picked.isEmpty else {
+                    contactStatus = "No contacts with a phone number found."
+                    return
+                }
+                watch.syncContacts(picked)
+                contactStatus = "Syncing \(picked.count) contacts…"
+            } label: {
+                Label("Sync contacts to watch", systemImage: "person.crop.circle.fill.badge.checkmark")
+            }
+            if let contactStatus {
+                Text(contactStatus).font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Contacts (#50)")
+        } footer: {
+            Text("Name + first phone number per contact, exactly like the official app's phone-book push (multipacket + CRC16).")
+        }
     }
 
     private var controlsSection: some View {

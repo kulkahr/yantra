@@ -52,7 +52,7 @@ final class FindPhoneCoordinator: NSObject, ObservableObject {
         active = false
         player?.stop()
         player = nil
-        try? hapticEngine?.stop()
+        hapticEngine?.stop()
         torchOn = false
         setTorch(false)
     }

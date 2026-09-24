@@ -24,6 +24,8 @@
 	<false/>
 	<key>NSBluetoothAlwaysUsageDescription</key>
 	<string>Yantra connects to your realme Smart Scale and boAt watch to display and store health data locally on this device.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>Yantra syncs contact names and numbers to your watch's phone book so calls show who's calling.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Yantra scans the QR code shown on your watch to pair it without typing anything, and takes photos from the watch's shutter button.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>

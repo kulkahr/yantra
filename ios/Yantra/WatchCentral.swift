@@ -74,6 +74,11 @@ final class WatchCentral: NSObject, ObservableObject {
     }
     /// Non-nil while a phone-started workout is running on the watch.
     @Published private(set) var sportSession: SportSession?
+    /// #49: the watch refused an app-started sport session. The Storm Call 3
+    /// firmware does not accept `01 8B` from the phone (the official app marks
+    /// it `sportModeSupportedFromApp = false` and never offers the feature),
+    /// so the UI hides the start-workout controls after the first refusal.
+    @Published private(set) var sportStartUnsupported = false
 
     @Published private(set) var foundWatches: [DiscoveredWatch] = []
 
@@ -119,6 +124,15 @@ final class WatchCentral: NSObject, ObservableObject {
         /// Today's steps `01 00` (GET_WALK_VALUE) — also matches the stream
         /// header cmd 0x0D the watch uses for this class of history replies.
         case steps
+        /// `80 A8` phone-book set ack (#50).
+        case phoneBook
+        /// `82 8F` watch-face switch ack (#46); carries the requested id so the
+        /// UI updates only after the watch confirms.
+        case watchFaceSet(id: Int)
+        /// `80 B4` navigation-status ack (#60).
+        case navigationStatus
+        /// `82 8A` navigation-event ack (#60).
+        case navigationEvent
     }
     private enum HistoryKind: Equatable {
         case hr(day: Int)
@@ -293,13 +307,16 @@ final class WatchCentral: NSObject, ObservableObject {
                 label: "HR history day \(day)", ack: .history(.hr(day: day)))
     }
 
-    /// Requests one day of 10-min sleep + periodic SpO2 history, strictly
-    /// serialized. Results persist into `WatchStore` (SRD-010 FR-2).
+    /// Requests one day of 1-min sleep + periodic SpO2 history, strictly
+    /// serialized. The official app requests 1-minute sleep resolution
+    /// (`SleepDataReq` → `GET_1MIN_SLEEP_DATA`, 15 bytes/hour) — #48 fixed by
+    /// switching off the legacy 10-min variant. Results persist into
+    /// `WatchStore` (SRD-010 FR-2).
     func loadSleepAndSpo2History(day: Int) {
         sleepHours = []
         spo2Samples = []
-        enqueue(KahaProtocol.requestSleepHistory(day: day, startHour: 0, endHour: 23),
-                label: "sleep history day \(day)", ack: .history(.sleep(day: day)))
+        enqueue(KahaProtocol.requestSleepHistory1Min(day: day, startHour: 0, endHour: 23),
+                label: "sleep history (1-min) day \(day)", ack: .history(.sleep(day: day)))
         enqueue(KahaProtocol.requestSpo2History(day: day, startHour: 0, endHour: 23),
                 label: "SpO2 history day \(day)", ack: .history(.spo2(day: day)))
     }
@@ -381,6 +398,8 @@ final class WatchCentral: NSObject, ObservableObject {
         ackTimer = nil
         commandInFlight = nil
         sportRetryPending = false
+        // Keep `sportStartUnsupported` across reconnects — it is a device
+        // capability, not link state (#49).
     }
 
     private func send(_ bytes: [UInt8]) {
@@ -480,6 +499,16 @@ final class WatchCentral: NSObject, ObservableObject {
             appendLog("watch faces: \(watchFaceIds.map(String.init).joined(separator: ", "))")
         case (KahaProtocol.ClassId.responseAlerts, KahaProtocol.SystemCmd.watchFaceCurrent):
             currentWatchFaceId = KahaProtocol.decodeCurrentWatchFace(frame.payload)
+        // #46: switch ack `82 8F` — payload[0] = 1 means the watch applied the
+        // face; only then update the selection (SetCurrentWatchFaceRes parity).
+        case (KahaProtocol.ClassId.responseAlerts, KahaProtocol.SystemCmd.watchFaceSet):
+            if case .watchFaceSet(let id) = commandInFlight?.ack,
+               KahaProtocol.decodeSportAck(frame.payload) == true {
+                currentWatchFaceId = id
+                appendLog("watch face \(id) active")
+            } else {
+                appendLog("watch face switch refused (ack \(frame.payload.hexString))")
+            }
 
         default:
             handleInfoResponse(frame)
@@ -500,8 +529,13 @@ final class WatchCentral: NSObject, ObservableObject {
                 sportRetryPending = false
                 appendLog("watch started \(pending.mode) (\(pending.indoor ? "indoor" : "outdoor")) — end it on the watch or here")
             } else {
-                appendLog("watch refused sport mode — raw ack: \(payload.hexString)")
-                retrySportStart(pending)
+                // #49: the Storm Call 3 does not accept app-started workouts —
+                // the official app declares this device
+                // `sportModeSupportedFromApp = false` and never sends `01 8B`.
+                // Surface it once and hide the controls instead of retrying.
+                sportStartUnsupported = true
+                sportSession = nil
+                appendLog("watch refused sport mode (raw ack \(payload.hexString)) — this model only starts workouts from the watch itself")
             }
         case .sportEnd:
             // Mode-0 selection: the official app has no stop command, so both
@@ -516,8 +550,8 @@ final class WatchCentral: NSObject, ObservableObject {
         }
     }
 
-    /// Issue #41: the watch refuses a start when a session is already active
-    /// (e.g. started on the watch itself). Stop first, then re-request once.
+    /// (Retained for devices whose firmware accepts `01 8B`; the Storm Call 3
+    /// is exempted above per the official app's capability flag, #49.)
     private func retrySportStart(_ pending: SportSession) {
         guard !sportRetryPending else {
             appendLog("start failed again — end the watch-side session, then retry")
@@ -549,10 +583,13 @@ final class WatchCentral: NSObject, ObservableObject {
         case KahaProtocol.InfoCmd.getDeviceName:
             deviceName = frame.payload.asciiString
         case KahaProtocol.InfoCmd.getFirmwareVersion:
-            // Issue #40: version payloads may carry a length/binary prefix —
-            // fall back to the printable subset, then hex, so the field is
-            // never silently blank.
-            if let s = frame.payload.asciiString {
+            // #47: the version string often ends with NUL padding (and older
+            // firmwares prepend a length byte) — `asciiString` treats NUL as
+            // content and returned nil, leaving the field blank. Trim NULs
+            // first, then fall back to the printable subset, then a hex dump
+            // so the field is never silently empty.
+            let nulTrimmed = frame.payload.filter { $0 != 0 }
+            if let s = nulTrimmed.asciiString {
                 firmwareVersion = s
             } else {
                 let printable = frame.payload.filter { (0x20..<0x7F).contains($0) }
@@ -561,6 +598,7 @@ final class WatchCentral: NSObject, ObservableObject {
                     : String(bytes: printable, encoding: .ascii)
                 appendLog("firmware raw payload: \(frame.payload.hexString)")
             }
+            appendLog("firmware = \(firmwareVersion ?? "?")")
         case KahaProtocol.InfoCmd.getDeviceTime:
             watchTime = KahaProtocol.decodeDeviceTime(frame.payload)
         case KahaProtocol.InfoCmd.getBatteryLevel:
@@ -645,7 +683,47 @@ final class WatchCentral: NSObject, ObservableObject {
     }
 
     func switchWatchFace(_ id: Int) {
-        enqueue(KahaProtocol.setWatchFace(id: id), label: "watch face → \(id)")
+        // #46: the switch ack (`82 8F`) updates the UI selection — the watch
+        // must confirm before we show the new id as active.
+        enqueue(KahaProtocol.setWatchFace(id: id), label: "watch face → \(id)",
+                ack: .watchFaceSet(id: id))
+    }
+
+    /// #50: syncs ContactsKit entries to the watch (name + number, 20 bytes
+    /// each, multipacket + CRC16 like the official app's SetPhoneBookReq).
+    func syncContacts(_ contacts: [(name: String, number: String)]) {
+        guard !contacts.isEmpty, contacts.count <= 30 else {
+            appendLog("contacts: nothing to sync (max 30 supported by the watch)")
+            return
+        }
+        for f in KahaProtocol.phoneBook(contacts) {
+            enqueue(f, label: "contact sync", ack: .phoneBook)
+        }
+    }
+
+    /// #60: starts navigation on the watch (start marker + status 2, Crest
+    /// `setNavigationStartOrStopOnBand` parity).
+    func startNavigation(destination: String, mode: KahaProtocol.NavigationMode) {
+        enqueue(KahaProtocol.navigationEvent(source: "Current Location",
+                                             destination: destination, mode: mode),
+                label: "navigation → \(destination)", ack: .navigationEvent)
+        enqueue(KahaProtocol.navigationStatus(2), label: "navigation status 2",
+                ack: .navigationStatus)
+    }
+
+    /// #60: pushes a turn-by-turn event (destination + remaining distance).
+    func updateNavigation(destination: String, remainingMeters: Int,
+                          mode: KahaProtocol.NavigationMode) {
+        enqueue(KahaProtocol.navigationEvent(source: "Current Location",
+                                             destination: destination, mode: mode),
+                label: "navigation update \(remainingMeters) m", ack: .navigationEvent)
+    }
+
+    /// #60: stops navigation on the watch (event=false + status 0).
+    func stopNavigation() {
+        enqueue(KahaProtocol.navigationStop(), label: "navigation stop", ack: .navigationEvent)
+        enqueue(KahaProtocol.navigationStatus(0), label: "navigation status 0",
+                ack: .navigationStatus)
     }
 
     func loadWorkoutDays(_ days: [Int]) {
@@ -702,10 +780,14 @@ final class WatchCentral: NSObject, ObservableObject {
             completeInFlight()
         case .history(.sleep(let day)):
             hrDay = day
-            sleepHours = KahaProtocol.decodeSleepHistory(data, startHour: 0)
+            // #48: 1-min sleep streams 15 bytes/hour; the legacy 10-min
+            // layout (6 bytes/hour) stays supported for older firmware.
+            let bytesPerHour = data.count % 15 == 0 ? 15 : 6
+            sleepHours = KahaProtocol.decodeSleepHistory(data, startHour: 0,
+                                                         bytesPerHour: bytesPerHour)
             persistSleepDay()
             let total = sleepHours.reduce(0.0) { $0 + $1.totalSleepMinutes }
-            appendLog("sleep history: \(sleepHours.count) hours · \(String(format: "%.0f", total)) min sleep")
+            appendLog("sleep history (\(bytesPerHour == 15 ? "1" : "10")-min): \(sleepHours.count) hours · \(String(format: "%.0f", total)) min sleep")
             completeInFlight()
         case .history(.spo2(let day)):
             hrDay = day
@@ -725,6 +807,22 @@ final class WatchCentral: NSObject, ObservableObject {
                     workoutDays.insert(d, at: 0)
                 }
                 appendLog("workout day -\(d.id): \(d.steps) steps · \(Int(d.distanceMeters)) m · \(Int(d.calories)) kcal")
+            }
+            completeInFlight()
+        case .phoneBook:
+            appendLog("contacts synced to watch (\(data.count) B ack)")
+            completeInFlight()
+        case .navigationStatus, .navigationEvent:
+            appendLog("navigation ack (\(data.count) B)")
+            completeInFlight()
+        case .watchFaceSet(let id):
+            // `82 8F` streams through the assembler too; treat any assembled
+            // payload as the ack and apply the pending id (#46).
+            if KahaProtocol.decodeSportAck(data) == true {
+                currentWatchFaceId = id
+                appendLog("watch face \(id) active")
+            } else {
+                appendLog("watch face switch refused (ack \(data.hexString))")
             }
             completeInFlight()
         case .steps:
@@ -910,8 +1008,11 @@ extension WatchCentral: CBPeripheralDelegate {
         // Reads AND notifications both land here (issue #8 lesson).
         if !characteristic.isNotifying {
             if characteristic.uuid == cb(KahaProtocol.GATT.firmwareRevision), firmwareReadPending {
+                // #47: NUL padding survives `.whitespacesAndNewlines` — strip
+                // it explicitly or the field shows blank.
                 firmwareVersion = String(data: v, encoding: .utf8)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(["\0"]))
                 firmwareReadPending = false
                 requestInfo()
             }
