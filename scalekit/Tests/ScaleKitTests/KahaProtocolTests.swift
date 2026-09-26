@@ -31,16 +31,28 @@ final class KahaProtocolTests: XCTestCase {
         XCTAssertEqual(f.classId, 0x00)
         XCTAssertEqual(f.cmdId, 0x81)
         XCTAssertEqual(f.payload.count, 10)
-        XCTAssertEqual(f.payload[0], 0x20) // century BCD
-        XCTAssertEqual(f.payload[1], 0x26) // year BCD
-        XCTAssertEqual(f.payload[2], 0x09)
-        XCTAssertEqual(f.payload[3], 0x23)
-        XCTAssertEqual(f.payload[4], 0x22)
-        XCTAssertEqual(f.payload[5], 0x14)
-        XCTAssertEqual(f.payload[6], 0x07)
+        // LeonardoBleService.k() parity: PLAIN BINARY bytes, not BCD.
+        XCTAssertEqual(f.payload[0], 20)   // century  → 0x14
+        XCTAssertEqual(f.payload[1], 26)   // year     → 0x1A
+        XCTAssertEqual(f.payload[2], 9)
+        XCTAssertEqual(f.payload[3], 23)
+        XCTAssertEqual(f.payload[4], 22)
+        XCTAssertEqual(f.payload[5], 14)
+        XCTAssertEqual(f.payload[6], 7)
         XCTAssertEqual(f.payload[7], 0x2B) // '+'
         XCTAssertEqual(f.payload[8], 5)
-        XCTAssertEqual(f.payload[9], 30)
+        XCTAssertEqual(f.payload[9], 30)   // minutes binary (0x1E)
+    }
+
+    func testSetDeviceTimeGoldenVector() {
+        // Audit golden vector: 2026-09-24 14:26:05 IST → 4-byte header + 10-byte
+        // payload: 00 87 0E 00 | 14 1A 09 18 0E 1A 05 2B 05 1E (14 bytes total).
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 5 * 3600 + 1800)!
+        let date = cal.date(from: DateComponents(year: 2026, month: 9, day: 24,
+                                                 hour: 14, minute: 26, second: 5))!
+        XCTAssertEqual(KahaProtocol.setDeviceTime(from: date, timeZone: cal.timeZone),
+                       [0x00, 0x87, 0x0E, 0x00, 0x14, 0x1A, 0x09, 0x18, 0x0E, 0x1A, 0x05, 0x2B, 0x05, 0x1E])
     }
 
     func testFrameParseRoundTrip() {
@@ -177,10 +189,43 @@ final class KahaProtocolTests: XCTestCase {
     }
 
     func testTodaysStepsDecode() {
-        // TodaysStepsDataRes: u16 LE at payload[1..2] (frame bytes 5..6).
-        XCTAssertEqual(KahaProtocol.decodeTodaysSteps([0x00, 0x88, 0x56]), 22152)
-        XCTAssertEqual(KahaProtocol.decodeTodaysSteps([0x00, 0x10, 0x0E]), 3600)
-        XCTAssertNil(KahaProtocol.decodeTodaysSteps([0x00, 0x10]))
+        // TodaysStepsDataRes: legacy 3-byte shape — type + u16 LE steps.
+        // (QF11: the u16-only path is retained for firmwares that send it.)
+        XCTAssertEqual(KahaProtocol.decodeTodaysFitness([0x00, 0x88, 0x56])?.steps, 22152)
+        XCTAssertEqual(KahaProtocol.decodeTodaysFitness([0x00, 0x10, 0x0E])?.steps, 3600)
+        XCTAssertNil(KahaProtocol.decodeTodaysFitness([0x00, 0x10]))
+    }
+
+    func testTodaysFitnessDecodeU32WithFloats() {
+        // QF11 (audit #10): full fitness shape — u32 LE steps + distance f32 +
+        // calories f32 (same field order as the live-verified `01 23`
+        // day summary / TodaysFitnessDataRes).
+        var p: [UInt8] = []
+        let steps = 70_000                                       // > u16 max
+        p += [UInt8(steps & 0xFF), UInt8((steps >> 8) & 0xFF),
+              UInt8((steps >> 16) & 0xFF), UInt8((steps >> 24) & 0xFF)]
+        p += withUnsafeBytes(of: Float(5_320.0).bitPattern.littleEndian) { Array($0) }
+        p += withUnsafeBytes(of: Float(312.5).bitPattern.littleEndian) { Array($0) }
+        let f = KahaProtocol.decodeTodaysFitness(p)
+        XCTAssertEqual(f?.steps, 70_000)
+        XCTAssertEqual(f?.meters ?? -1, 5_320.0, accuracy: 0.01)
+        XCTAssertEqual(f?.calories ?? -1, 312.5, accuracy: 0.01)
+    }
+
+    func testTodaysFitnessIgnoresGarbageFloatTail() {
+        // QF11: non-finite/negative floats are dropped, steps stay valid.
+        var p: [UInt8] = [0x80, 0x0D, 0x03, 0x00]                // steps = 200_000
+        p += withUnsafeBytes(of: Float.nan.bitPattern.littleEndian) { Array($0) }
+        p += withUnsafeBytes(of: Float(-1).bitPattern.littleEndian) { Array($0) }
+        let f = KahaProtocol.decodeTodaysFitness(p)
+        XCTAssertEqual(f?.steps, 200_000)
+        XCTAssertNil(f?.meters)
+        XCTAssertNil(f?.calories)
+    }
+
+    func testRequestTodaysFitnessFrame() {
+        // QF11 (audit #15): GET_TODAY_FITNESS = {1, 47, 4, 0} — empty payload.
+        XCTAssertEqual(KahaProtocol.requestTodaysFitness(), [0x01, 0x2F, 0x04, 0x00])
     }
 
     // MARK: - Sleep history (SleepDataRes layout)

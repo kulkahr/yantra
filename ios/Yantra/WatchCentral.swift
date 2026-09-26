@@ -36,6 +36,7 @@ final class WatchCentral: NSObject, ObservableObject {
     @Published private(set) var stage: Stage = .idle
     @Published private(set) var log: [String] = []
     @Published private(set) var deviceName: String?
+    @Published private(set) var hardwareVersion: String?
     @Published private(set) var firmwareVersion: String?
     @Published private(set) var batteryPercent: Int?
     @Published private(set) var watchTime: Date?
@@ -96,6 +97,9 @@ final class WatchCentral: NSObject, ObservableObject {
     private var subscribed: Set<CBUUID> = []
     private var handshakeDone = false
     private var firmwareReadPending = false
+    /// QF10 (audit #8): was a battery characteristic ever discovered? Gates
+    /// the handshake — firmware without 0x2A19 must not block going live.
+    private var sawBatteryChar = false
     private var scanTimeout: DispatchWorkItem?
     /// QR-pairing targets: MAC from the QR (logged only — iOS addresses by
     /// peripheral UUID) and the decoded name filter used to match advertisements.
@@ -121,8 +125,9 @@ final class WatchCentral: NSObject, ObservableObject {
         case sportEnd
         /// Workout-day summary `81 23`; carries the daysAgo for the record id.
         case workoutSummary(day: Int)
-        /// Today's steps `01 00` (GET_WALK_VALUE) — also matches the stream
-        /// header cmd 0x0D the watch uses for this class of history replies.
+        /// Today's steps/fitness `01 00`/`01 2f` (GET_WALK_VALUE /
+        /// GET_TODAY_FITNESS) — also matches the stream header cmd 0x0D the
+        /// watch uses for this class of history replies.
         case steps
         /// `80 A8` phone-book set ack (#50).
         case phoneBook
@@ -151,6 +156,15 @@ final class WatchCentral: NSObject, ObservableObject {
     private let ackTimeout: TimeInterval = 8
     /// One stop-then-start retry per start attempt (#41).
     private var sportRetryPending = false
+    /// QF14 (audit #25): ONE automatic reconnect retry after an unexpected
+    /// disconnect or failed connect — 6 s out, cancelled by any user flow
+    /// (disconnect/scan/pair), flag reset when the link comes back up.
+    private var reconnectAttempted = false
+    private var reconnectWork: DispatchWorkItem?
+    private var lastLinkTarget: (id: UUID, name: String)?
+    /// Set by `disconnect()` so the later `didDisconnectPeripheral` callback
+    /// doesn't schedule an auto-retry for a teardown the user asked for.
+    private var userDisconnectPending = false
 
     override init() {
         super.init()
@@ -176,6 +190,24 @@ final class WatchCentral: NSObject, ObservableObject {
         scanTimeout = nil
         central.stopScan()
         if stage == .scanning { stage = .idle }
+    }
+
+    /// Adds to the scan list, keyed by peripheral id — one row per watch with
+    /// the best RSSI and freshest name kept (QF7, audit #1: the previous
+    /// whole-struct `contains` check let the same watch re-appear whenever its
+    /// advertised RSSI changed).
+    private func upsertScanEntry(_ entry: DiscoveredWatch) {
+        if let i = foundWatches.firstIndex(where: { $0.id == entry.id }) {
+            let existing = foundWatches[i]
+            foundWatches[i] = DiscoveredWatch(
+                id: entry.id,
+                name: entry.name.isEmpty ? existing.name : entry.name,
+                rssi: max(existing.rssi, entry.rssi))
+            foundWatches.sort { $0.rssi > $1.rssi }
+        } else {
+            foundWatches.append(entry)
+            foundWatches.sort { $0.rssi > $1.rssi }
+        }
     }
 
     private func scheduleScanTimeout() {
@@ -208,6 +240,7 @@ final class WatchCentral: NSObject, ObservableObject {
         case .idle, .failed: break
         default: return
         }
+        reconnectAttempted = false   // QF14: explicit user action starts a fresh retry budget
         Task { @MainActor in
             guard let stored = DeviceStore.shared.devices.first(where: { $0.kind == .watch })
             else { return }
@@ -224,6 +257,8 @@ final class WatchCentral: NSObject, ObservableObject {
     /// Direct connect from a persisted peripheral UUID; falls back to a
     /// name-filtered rescan when iOS no longer caches the peripheral (#37).
     private func connectStored(peripheralId: UUID, name: String) {
+        lastLinkTarget = (peripheralId, name)   // QF14: auto-retry target
+        userDisconnectPending = false           // fresh link — honor its callbacks
         pendingPair = peripheralId
         registerInInventory(peripheralId: peripheralId, name: name)
         resetLink()
@@ -236,6 +271,25 @@ final class WatchCentral: NSObject, ObservableObject {
             appendLog("watch not cached — rescanning to reconnect")
             scanAndPair(nameFilter: name)
         }
+    }
+
+    /// QF14 (audit #25): ONE self-healing attempt when the link dies without
+    /// user action. 6 s gives the watch time to advertise again; the guard
+    /// flag keeps a flaky link from looping (it resets on `didConnect` and on
+    /// explicit user reconnects).
+    private func scheduleReconnectRetry(reason: String) {
+        guard !reconnectAttempted, let target = lastLinkTarget else { return }
+        reconnectAttempted = true
+        reconnectWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard case .failed = self.stage else { return }   // recovered, or a user flow took over
+            self.appendLog("auto-retry: reconnecting to \(target.name)…")
+            self.connectStored(peripheralId: target.id, name: target.name)
+        }
+        reconnectWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
+        appendLog("\(reason) — one auto-retry in 6 s")
     }
 
     // MARK: QR pairing (official-app parity, SRD-010 §3)
@@ -286,6 +340,13 @@ final class WatchCentral: NSObject, ObservableObject {
     }
 
     func disconnect() {
+        // QF14 (audit #25): user-initiated teardown — kill any pending
+        // auto-retry first so the coming didDisconnectPeripheral callback
+        // doesn't resurrect the link.
+        userDisconnectPending = true
+        reconnectAttempted = false
+        reconnectWork?.cancel()
+        reconnectWork = nil
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil
         handshakeDone = false
@@ -353,7 +414,7 @@ final class WatchCentral: NSObject, ObservableObject {
             guard let self, let cur = self.commandInFlight,
                   cur.bytes == cmd.bytes else { return }
             self.appendLog("⏱ no ack for \(cmd.label) — continuing")
-            self.completeInFlight()
+            self.forceCompleteInFlight()
         }
         ackTimer = t
         DispatchQueue.main.asyncAfter(deadline: .now() + ackTimeout, execute: t)
@@ -366,6 +427,17 @@ final class WatchCentral: NSObject, ObservableObject {
         ackTimer = nil
         commandInFlight = nil
         drainQueue()
+    }
+
+    /// QF8 (audit #5): force-completing a history command mid-stream must
+    /// discard the partial `0x7F` reassembly — otherwise the leftover stream
+    /// fragments are decoded under the NEXT command's decoder kind and the
+    /// day's data lands nowhere ("no in-flight decoder").
+    private func forceCompleteInFlight() {
+        if case .history? = commandInFlight?.ack {
+            assembler.reset()
+        }
+        completeInFlight()
     }
 
     private func isResponseClass(_ c: UInt8) -> Bool {
@@ -391,8 +463,10 @@ final class WatchCentral: NSObject, ObservableObject {
         chars = [:]
         subscribed = []
         firmwareReadPending = false
+        sawBatteryChar = false
         handshakeDone = false
         assembler.reset()
+        reconnectWork?.cancel()   // QF14: a new link attempt supersedes any pending auto-retry
         queue.removeAll()
         ackTimer?.cancel()
         ackTimer = nil
@@ -422,6 +496,8 @@ final class WatchCentral: NSObject, ObservableObject {
         // back-to-back burst had all but the first request dropped by the
         // watch, which is why firmware/battery/name never showed).
         enqueue(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getDeviceName), label: "get name")
+        enqueue(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getHardwareVersion),
+                label: "get hardware version")   // QF6 (audit #6): GET_HARDWARE_VERSION = 00 01 04 00
         enqueue(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getFirmwareVersion), label: "get firmware")
         enqueue(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getDeviceTime), label: "get time")
         enqueue(KahaProtocol.infoFrame(cmdId: KahaProtocol.InfoCmd.getBatteryLevel), label: "get battery")
@@ -435,10 +511,12 @@ final class WatchCentral: NSObject, ObservableObject {
         // Resync the watch clock to the phone (#20).
         enqueue(KahaProtocol.setDeviceTime(from: Date()), label: "sync clock")
         // Today's steps — the watch does NOT push them on connect; Crest asks
-        // explicitly (GET_WALK_VALUE `01 00 05 00 00`, #44).
-        enqueue(KahaProtocol.frame(classId: KahaProtocol.ClassId.fitness, cmdId: 0x00,
-                                   payload: [0x00]),
-                label: "today's steps", ack: .steps)
+        // explicitly. QF11 (audit #10/#15): ask for the full daily summary via
+        // GET_TODAY_FITNESS `01 2f` (u32 steps + distance + calories),
+        // matching the official flow, instead of the u16-capped
+        // GET_WALK_VALUE `01 00`.
+        enqueue(KahaProtocol.requestTodaysFitness(),
+                label: "today's fitness", ack: .steps)
         handshakeDone = true
         stage = .live
         appendLog("watch live — handshake queued (7 commands)")
@@ -476,15 +554,30 @@ final class WatchCentral: NSObject, ObservableObject {
             }
             return   // events never complete queued commands
 
-        // --- Today's steps response (response class 0x81, cmd 0x00) ---
-        // Decompiled parser only accepts it while a TodaysStepsDataReq is in
-        // flight; the queue gives us the same guarantee (#44).
-        case (KahaProtocol.ClassId.responseFitness, 0x00):
-            if commandInFlight?.ack == .steps, let steps = KahaProtocol.decodeTodaysSteps(frame.payload) {
-                liveSteps = KahaProtocol.LiveSteps(steps: steps, meters: liveSteps?.meters,
-                                                   calories: liveSteps?.calories)
+        // --- Today's steps/fitness response (response class 0x81, cmd 0x00 or
+        // 0x2f) — QF11 (audit #10/#15): the decompiled parser reads u32 steps
+        // + distance/calories floats from this family, not just the legacy
+        // u16. As steps (`.steps` ack) it feeds the Live card; as the day-0
+        // summary (`.workoutSummary(0)`) it fills the Workouts card. Both
+        // shapes decode via `decodeTodaysFitness`. Only accepted while a
+        // steps/fitness request is in flight — the queue guarantees that
+        // (decompiled `commandObject` parity, #44).
+        case (KahaProtocol.ClassId.responseFitness, 0x00),
+             (KahaProtocol.ClassId.responseFitness, KahaProtocol.FitnessCmd.todaysFitness):
+            if commandInFlight?.ack == .steps,
+               let fit = KahaProtocol.decodeTodaysFitness(frame.payload) {
+                liveSteps = KahaProtocol.LiveSteps(
+                    steps: fit.steps,
+                    meters: fit.meters ?? liveSteps?.meters,
+                    calories: fit.calories ?? liveSteps?.calories)
                 persistLiveSteps()
-                appendLog("today's steps: \(steps)")
+                appendLog("today's fitness: \(fit.steps) steps" +
+                          (fit.meters.map { String(format: " · %.0f m", $0) } ?? "") +
+                          (fit.calories.map { String(format: " · %.0f kcal", $0) } ?? ""))
+            } else if commandInFlight?.ack == .workoutSummary(day: 0),
+                      let d = decodeWorkoutSummary(frame.payload, day: 0) {
+                applyWorkoutDay(d)
+                appendLog("workout day -\(d.id): \(d.steps) steps · \(Int(d.distanceMeters)) m · \(Int(d.calories)) kcal")
             }
 
         // --- Sport session acks (response class 0x81) ---
@@ -582,6 +675,8 @@ final class WatchCentral: NSObject, ObservableObject {
         switch frame.cmdId {
         case KahaProtocol.InfoCmd.getDeviceName:
             deviceName = frame.payload.asciiString
+        case KahaProtocol.InfoCmd.getHardwareVersion:
+            hardwareVersion = frame.payload.asciiString   // QF6 (audit #6)
         case KahaProtocol.InfoCmd.getFirmwareVersion:
             // #47: the version string often ends with NUL padding (and older
             // firmwares prepend a length byte) — `asciiString` treats NUL as
@@ -618,17 +713,37 @@ final class WatchCentral: NSObject, ObservableObject {
                           distanceMeters: Double(KahaProtocol.leFloat(p, 4)))
     }
 
+    /// QF11 (audit #15): single upsert path for workout-day summaries —
+    /// replace in place for a known day, newest day goes to the front.
+    private func applyWorkoutDay(_ d: WorkoutDay) {
+        if let i = workoutDays.firstIndex(where: { $0.id == d.id }) {
+            workoutDays[i] = d
+        } else {
+            workoutDays.insert(d, at: 0)
+        }
+    }
+
     /// Reacts to watch-initiated control pushes (#25/#26/#30/#35/#36).
     private func handleWatchEvent(_ event: KahaProtocol.WatchControlEvent) {
         switch event {
         case .findMyPhone:
             // #35: ring + vibrate the phone, not just a notification.
+            // QF9 (audit #21): FIND_MY_PHONE_ACK = 81 05 05 00 01 — the official
+            // app confirms ringing started so the watch clears its "searching" UI.
+            enqueue(KahaProtocol.frame(classId: 0x81, cmdId: 0x05, payload: [0x01]),
+                    label: "find-phone ack")
             Task { @MainActor in
                 FindPhoneCoordinator.shared.begin()
             }
             appendLog("watch asks: find my phone — ringing & vibrating")
         case .cameraEnter:
-            appendLog("watch: camera remote")
+            // QF13 (audit #20): the shutter event usually follows within a
+            // second — pre-heat the capture session now so the first
+            // watch-triggered shot doesn't pay session start-up lag.
+            Task { @MainActor in
+                WatchCameraCoordinator.shared.warmUp()
+            }
+            appendLog("watch: camera remote — session warming up")
         case .cameraCapture:
             // #36: take a real photo from the watch shutter.
             Task { @MainActor in
@@ -640,15 +755,22 @@ final class WatchCentral: NSObject, ObservableObject {
             appendLog("watch: call \(action)")
         case .musicPlay, .musicPause, .musicNext, .musicPrevious,
              .volumeUp, .volumeDown:
+            // QF12 (audit #19): the watch's transport keys drive the phone's
+            // media session (MusicRemoteCoordinator), not just the log.
+            Task { @MainActor in
+                MusicRemoteCoordinator.shared.apply(event)
+            }
             appendLog("watch music: \(event)")
         }
     }
 
     // MARK: - Phone → watch controls (#23/#24/#25/#26/#30)
 
+    /// QF2 (audit #17): title + body framed as `title\nbody` (first line renders
+    /// as the header on the watch) and clipped to the model's 200-char limit
+    /// (`maxCharSupportedInNotification`, StormCall3BleApiImpl) — not 58.
     func sendNotification(title: String, body: String, type: UInt8 = 18) {
-        let text = title.isEmpty ? body : "\(title): \(body)"
-        for f in KahaProtocol.sendMessage(String(text.prefix(58)), type: type) {
+        for f in KahaProtocol.sendNotificationMessage(title: title, body: body, type: type) {
             send(f)
         }
     }
@@ -691,13 +813,20 @@ final class WatchCentral: NSObject, ObservableObject {
 
     /// #50: syncs ContactsKit entries to the watch (name + number, 20 bytes
     /// each, multipacket + CRC16 like the official app's SetPhoneBookReq).
+    /// QF5 (audit #18): the official app caps ONE phone-book request at 20
+    /// contacts (`setMaxContactsInOneRequest(20)`, StormCall3BleApiImpl) —
+    /// larger lists are split into sequential requests.
     func syncContacts(_ contacts: [(name: String, number: String)]) {
-        guard !contacts.isEmpty, contacts.count <= 30 else {
-            appendLog("contacts: nothing to sync (max 30 supported by the watch)")
+        guard !contacts.isEmpty, contacts.count <= 100 else {
+            appendLog("contacts: nothing to sync (100 max in Yantra)")
             return
         }
-        for f in KahaProtocol.phoneBook(contacts) {
-            enqueue(f, label: "contact sync", ack: .phoneBook)
+        for batch in stride(from: 0, to: contacts.count, by: 20).map({
+            Array(contacts[$0..<min($0 + 20, contacts.count)])
+        }) {
+            for f in KahaProtocol.phoneBook(batch) {
+                enqueue(f, label: "contact sync (\(batch.count))", ack: .phoneBook)
+            }
         }
     }
 
@@ -728,8 +857,16 @@ final class WatchCentral: NSObject, ObservableObject {
 
     func loadWorkoutDays(_ days: [Int]) {
         for d in days {
-            enqueue(KahaProtocol.requestWorkoutSummary(daysAgo: d),
-                    label: "workout summary day -\(d)", ack: .workoutSummary(day: d))
+            // QF11 (audit #15): day 0 uses GET_TODAY_FITNESS `01 2f` (the
+            // official app never sends `01 23 00` mid-day — it can return
+            // yesterday-completed totals); n ≥ 1 uses the day summary `01 23`.
+            if d == 0 {
+                enqueue(KahaProtocol.requestTodaysFitness(),
+                        label: "today's fitness", ack: .workoutSummary(day: 0))
+            } else {
+                enqueue(KahaProtocol.requestWorkoutSummary(daysAgo: d),
+                        label: "workout summary day -\(d)", ack: .workoutSummary(day: d))
+            }
         }
     }
 
@@ -800,12 +937,10 @@ final class WatchCentral: NSObject, ObservableObject {
             }
             completeInFlight()
         case .workoutSummary(let day):
+            // QF11 (audit #15): shared upsert — the plain `81 2f` reply path
+            // in `handleFrame` lands in the same store.
             if let d = decodeWorkoutSummary(data, day: day) {
-                if let i = workoutDays.firstIndex(where: { $0.id == d.id }) {
-                    workoutDays[i] = d
-                } else {
-                    workoutDays.insert(d, at: 0)
-                }
+                applyWorkoutDay(d)
                 appendLog("workout day -\(d.id): \(d.steps) steps · \(Int(d.distanceMeters)) m · \(Int(d.calories)) kcal")
             }
             completeInFlight()
@@ -826,15 +961,20 @@ final class WatchCentral: NSObject, ObservableObject {
             }
             completeInFlight()
         case .steps:
-            // TodaysStepsDataRes — u32 LE at payload bytes 5..8. Some
-            // firmware revisions also answer with a 0x0D-headered stream
-            // (seen live: `cmd 0x0D, 1152 bytes`), so this ack catches both.
-            if let steps = KahaProtocol.decodeTodaysSteps(data) {
-                let live = KahaProtocol.LiveSteps(steps: steps, meters: liveSteps?.meters,
-                                                  calories: liveSteps?.calories)
+            // QF11 (audit #10): reply shapes this ack catches — the 3-byte
+            // `type + u16` legacy body and the ≥12-byte full fitness shape
+            // (u32 steps @0 + gated distance/calories floats), both via
+            // `decodeTodaysFitness`. Some firmware revisions also answer
+            // with a 0x0D-headered stream (seen live: `cmd 0x0D, 1152
+            // bytes`); anything undecodable logs a hex dump.
+            if let fit = KahaProtocol.decodeTodaysFitness(data) {
+                let live = KahaProtocol.LiveSteps(
+                    steps: fit.steps,
+                    meters: fit.meters ?? liveSteps?.meters,
+                    calories: fit.calories ?? liveSteps?.calories)
                 liveSteps = live
                 persistLiveSteps()
-                appendLog("today's steps: \(steps)")
+                appendLog("today's steps: \(fit.steps)")
             } else {
                 appendLog("today's steps: undecodable payload (\(data.count) B: \(Array(data.prefix(12)).hexString))")
             }
@@ -937,12 +1077,13 @@ extension WatchCentral: CBCentralManagerDelegate {
             return
         }
         let entry = DiscoveredWatch(id: peripheral.identifier, name: n, rssi: RSSI.intValue)
-        if !foundWatches.contains(entry) { foundWatches.append(entry) }
+        upsertScanEntry(entry)   // QF7: one row per watch, best RSSI kept
         // Auto-pair on first hit when pairing was initiated by QR/MAC or by a
         // cache-miss retry (issue #37).
         if connectTargetName != nil || pendingPair != nil {
             stopScan()
             pendingPair = peripheral.identifier
+            userDisconnectPending = false   // fresh link — honor its callbacks
             resetLink()
             peripheral.delegate = self
             central.connect(peripheral)
@@ -952,6 +1093,7 @@ extension WatchCentral: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
+        reconnectAttempted = false   // QF14: link is up — retry budget restored
         appendLog("GATT connected — discovering services")
         peripheral.delegate = self
         peripheral.discoverServices(nil)
@@ -960,14 +1102,22 @@ extension WatchCentral: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager,
                         didFailToConnect peripheral: CBPeripheral, error: Error?) {
         stage = .failed("connect failed: \(error?.localizedDescription ?? "unknown")")
+        scheduleReconnectRetry(reason: "connect failed")   // QF14 (audit #25)
     }
 
     func centralManager(_ central: CBCentralManager,
                         didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
+        // QF14 (audit #25): a user-initiated teardown already went through
+        // `disconnect()` — honor it (stay idle) instead of flagging a failure.
+        if userDisconnectPending {
+            userDisconnectPending = false
+            return
+        }
         handshakeDone = false
         queue.removeAll()
         commandInFlight = nil
         stage = .failed(error == nil ? "watch disconnected" : "disconnected: \(error!.localizedDescription)")
+        scheduleReconnectRetry(reason: "unexpected disconnect")   // QF14
     }
 }
 
@@ -986,6 +1136,9 @@ extension WatchCentral: CBPeripheralDelegate {
         guard error == nil else { return }
         for c in service.characteristics ?? [] {
             chars[c.uuid] = c
+            if c.uuid == cb(KahaProtocol.GATT.batteryLevel) {
+                sawBatteryChar = true   // QF10: present → its CCCD is required
+            }
             if c.uuid == cb(KahaProtocol.GATT.uartRead) || c.uuid == cb(KahaProtocol.GATT.batteryLevel) {
                 subscribe(c)
             }
@@ -994,9 +1147,12 @@ extension WatchCentral: CBPeripheralDelegate {
                 peripheral.readValue(for: c)
             }
         }
-        // Both CCCDs up (and no pending standard reads) → queued handshake.
+        // QF10 (audit #8): go live once the UART notify is up AND either the
+        // battery CCCD subscribed or this firmware never exposed a battery
+        // characteristic at all — demanding both CCCDs hung the whole
+        // handshake on firmware without 0x2A19.
         if subscribed.contains(cb(KahaProtocol.GATT.uartRead)),
-           subscribed.contains(cb(KahaProtocol.GATT.batteryLevel)),
+           subscribed.contains(cb(KahaProtocol.GATT.batteryLevel)) || !sawBatteryChar,
            !handshakeDone, !firmwareReadPending {
             requestInfo()
         }

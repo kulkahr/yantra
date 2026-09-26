@@ -22,34 +22,34 @@ Result summary: **protocol constants verified correct** across the board. One re
 (device-time BCD encoding), several fidelity gaps, and a handful of enhancement
 opportunities. Feature-by-feature:
 
-| # | Feature | Verdict vs official app |
-|---|---|---|
-| 1 | Scan & pair | ✅ parity, iOS-specific gaps |
-| 2 | QR pairing | ✅ parity (capability-aware) |
-| 3 | Transport & frame codec | ✅ parity |
-| 4 | Connection handshake | ✅ parity |
-| 5 | Command queue | ✅ parity |
-| 6 | Device info (name/fw/hw) | ⚠️ missing hardware-version command |
-| 7 | Device clock sync | ❌ **BUG — BCD vs binary** |
-| 8 | Battery | ⚠️ uses GATT instead of the protocol command |
-| 9 | Live health (HR/BP/stress) | ✅ parity |
-| 10 | Live + daily steps | ⚠️ data model truncated |
-| 11 | HR history | ⚠️ cadence inference is wrong for partial days |
-| 12 | Sleep history | ✅ parity (1-min), ⚠️ day-boundary bug |
-| 13 | SpO₂ history | ✅ parity, ⚠️ 0-filter mismatch |
-| 14 | Workout/sport sessions | ✅ parity (capability-aware), ⚠️ no real-time sport data |
-| 15 | Workout day summaries | ❌ partial-day request mismatch |
-| 16 | Watch faces (list/switch) | ⚠️ upload absent (out of scope) |
-| 17 | Notifications & calls | ⚠️ 200-char limit ignored, no icon/type routing |
-| 18 | Contacts sync | ⚠️ dedupe/multi-number gaps |
-| 19 | Music control | ⚠️ metadata push missing |
-| 20 | Camera remote | ✅ parity, ⚠️ no preview |
-| 21 | Find phone / find watch | ✅ parity |
-| 22 | Navigation push | ⚠️ no real navigation feed |
-| 23 | History persistence | ✅ local-only parity, ⚠️ sleep double-count |
-| 24 | HealthKit export | ⚠️ date fabrication bug |
-| 25 | Auto-reconnect | ⚠️ no backoff or re-subscribe-on-fail policy |
-| 26 | Multi-device hub | ✅ SRD-009 architecture, ⚠️ single-session transport |
+| # | Feature | Verdict vs official app | Quick-fix status |
+|---|---|---|---|
+| 1 | Scan & pair | ✅ parity, iOS-specific gaps | ✅ **FIXED (QF7)** scan-list upsert |
+| 2 | QR pairing | ✅ parity (capability-aware) | — |
+| 3 | Transport & frame codec | ✅ parity | — |
+| 4 | Connection handshake | ✅ parity | — |
+| 5 | Command queue | ✅ parity | ✅ **FIXED (QF8)** stream-discard on timeout |
+| 6 | Device info (name/fw/hw) | ⚠️ missing hardware-version command | ✅ **FIXED (QF6)** |
+| 7 | Device clock sync | ❌ **BUG — BCD vs binary** | ✅ **FIXED (QF1)** |
+| 8 | Battery | ⚠️ uses GATT instead of the protocol command | ✅ **FIXED (QF10)** battery-optional handshake gate |
+| 9 | Live health (HR/BP/stress) | ✅ parity | — |
+| 10 | Live + daily steps | ⚠️ data model truncated | ✅ **FIXED (QF11)** u32 steps + `01 2f` |
+| 11 | HR history | ⚠️ cadence inference is wrong for partial days | open (needs capture) |
+| 12 | Sleep history | ✅ parity (1-min), ⚠️ day-boundary bug | ✅ **FIXED (QF3)** inflation; day-boundary open |
+| 13 | SpO₂ history | ✅ parity, ⚠️ 0-filter mismatch | open (cosmetic) |
+| 14 | Workout/sport sessions | ✅ parity (capability-aware), ⚠️ no real-time sport data | — |
+| 15 | Workout day summaries | ❌ partial-day request mismatch | ✅ **FIXED (QF11)** `01 2f` for today + shared upsert |
+| 16 | Watch faces (list/switch) | ⚠️ upload absent (out of scope) | — |
+| 17 | Notifications & calls | ⚠️ 200-char limit ignored, no icon/type routing | ✅ **FIXED (QF2)** 200-char + title/body |
+| 18 | Contacts sync | ⚠️ dedupe/multi-number gaps | ✅ **FIXED (QF5)** ≤20/request batching |
+| 19 | Music control | ⚠️ metadata push missing | ✅ **FIXED (QF12)** remote commands wired; metadata push open |
+| 20 | Camera remote | ✅ parity, ⚠️ no preview | ✅ **FIXED (QF13)** session warm-up; preview open |
+| 21 | Find phone / find watch | ✅ parity | ✅ **FIXED (QF9)** ack frame |
+| 22 | Navigation push | ⚠️ no real navigation feed | open (MapKit feed) |
+| 23 | History persistence | ✅ local-only parity, ⚠️ sleep double-count | ✅ **FIXED (QF3)**; retention open |
+| 24 | HealthKit export | ⚠️ date fabrication bug | ✅ **FIXED (QF4)** dedup + hourly sleep |
+| 25 | Auto-reconnect | ⚠️ no backoff or re-subscribe-on-fail policy | ✅ **FIXED (QF14)** one 6 s auto-retry |
+| 26 | Multi-device hub | ✅ SRD-009 architecture, ⚠️ single-session transport | open (transport unification) |
 
 Per-feature details below. Each section ends with **What's wrong / What needs fixing /
 What can be enhanced**.
@@ -241,7 +241,7 @@ minutes) — actually all 6 date fields (BCD vs binary).
   live capture: the decompiled code sends ASCII digits ("05","30" → `0x30 0x35 …`? no —
   `Byte.parseByte("30") = 30 = 0x1E`, binary 30). So binary for all fields, matching
   `aput-byte` of parsed ints.
-- Add a golden vector: 2026-09-24 14:26:05 IST → `00 87 0E 00 14 1A 09 18 0E 05 2B 05 1E`.
+- Add a golden vector: 2026-09-24 14:26:05 IST → `00 87 0E 00 14 1A 09 18 0E 1A 05 2B 05 1E` (14 bytes: 4-byte header + 10-byte payload, minute byte `0x1A` = 26).
 
 **What can be enhanced.**
 - Sync the clock also on `0x00 0x06` response drift > 60 s (the official app re-syncs on
@@ -262,9 +262,10 @@ the handshake gate (`subscribed.contains(batteryLevel)`), coupling the handshake
 characteristic some firmwares may not expose — if it's missing the watch never goes
 "live".
 
-**What needs fixing.**
-- Make the handshake gate "UART notify CCCD + (battery CCCD OR battery-not-found)" so a
-  firmware without `0x2A19` still handshakes (fallback: rely on the `00 08` command only).
+**What needs fixing.** ✅ FIXED (QF10) — the gate is now "UART notify CCCD AND (battery
+CCCD subscribed OR no battery characteristic was ever discovered)" (`sawBatteryChar`
+tracked during discovery, reset in `resetLink()`), so firmware without `0x2A19`
+handshakes and relies on the `00 08` command for battery.
 
 **What can be enhanced.**
 - Low-battery warning (official app notifies; the scale side of Yantra already has this
@@ -302,17 +303,15 @@ and the app renders steps · km · kcal), and requests `GET_TODAY_FITNESS_VALUE
 (01 2f 04 00)` for the full daily summary (steps/distance/calories for the day).
 
 **What's wrong.**
-- `decodeTodaysSteps` only reads the u16 steps — it caps at 65,535 steps/day (u16) even
-  though the live push carries u32. A 70k-step day shows a wrong count if it arrives via
-  the `81 00` path.
-- Distance/calories from the `01 00` response are dropped (only the `06 81` 12-byte
-  variant carries them).
-- `01 2f` (today's fitness) is declared in `FitnessCmd.todaysFitness` but never sent.
+- ~~`decodeTodaysSteps` only reads the u16 steps~~ ✅ FIXED (QF11): `decodeTodaysFitness`
+  decodes the full shape (u32 steps + gated distance/calories floats); the u16 legacy
+  shape is retained for old firmware, and the stream-path `.steps` ack reads u32 at
+  payload[5..8] (`TodaysStepsDataRes`).
+- ~~Distance/calories dropped; `01 2f` never sent~~ ✅ FIXED (QF11): the handshake now
+  requests `GET_TODAY_FITNESS (01 2f)` and renders steps · m · kcal, keeping the old
+  values when a reply omits them.
 
-**What needs fixing.**
-- Parse the u32 (and distance/calories floats where present) from the `81 00` payload —
-  the decompiled reader shows the split layout; port it fully.
-- Send `01 2f` in the handshake (or on the Workouts card) and render the summary.
+**What needs fixing.** Nothing protocol-level; remaining gaps are UX (below).
 
 **What can be enhanced.**
 - Step-goal ring: `SET_DAILY_WALK_TARGET` / `GET_WALK_DAILY_TARGET` constants exist; the
@@ -456,17 +455,13 @@ persist in `workoutDays` (session-only, not `WatchStore`).
 sport-mode *detail* history is not supported, consistent with `#49`).
 
 **What's wrong.**
-- The **request parameter is wrong for partial days**: `01 23 [day]` counts days the way
-  the watch does, but the official app asks *today* with `01 23 00` only at midnight
-  rollover and otherwise uses `GET_TODAY_FITNESS_VALUE (01 2f)` for "today". Using
-  `01 23 00` mid-day returns yesterday-completed totals on some firmwares (documented
-  live in the log line "workout day -0"), so Today can disagree with the Live-steps
-  card.
-- Summaries are not persisted (`workoutDays` dies with the session) — inconsistent with
-  FR-2 and the Stored-days section.
+- ~~The **request parameter is wrong for partial days**~~ ✅ FIXED (QF11): day 0 now uses
+  `GET_TODAY_FITNESS (01 2f)` (handshake and `loadWorkoutDays`), `01 23 [n]` stays for
+  n ≥ 1 — the official flow. `applyWorkoutDay` gives both reply paths one shared upsert.
+- Summaries are still not persisted (`workoutDays` dies with the session) — inconsistent
+  with FR-2 and the Stored-days section.
 
 **What needs fixing.**
-- Use `01 2f` for day 0 (and `01 23 [n]` for n ≥ 1), matching the official flow.
 - Persist `WorkoutDay`s into `WatchStore` (`steps`/`calories`/`distanceMeters` fields
   already exist).
 
@@ -570,17 +565,20 @@ the watch shows what's playing, and the watch's next/prev events actually drive 
 phone player (`MPRemoteCommandCenter`-equivalent on Android).
 
 **What's wrong.**
-- Watch music events are only logged — they don't control iOS playback.
+- ~~Watch music events are only logged~~ ✅ FIXED (QF12): the six music events route
+  through `MusicRemoteCoordinator` — play/pause/next/prev via `MPRemoteCommandCenter`,
+  system volume ±1/16 via a hidden `MPVolumeView` slider (the public iOS surface;
+  `MPRemoteCommandCenter` alone only reaches handlers registered inside this app, which
+  is why the volume path uses `MPVolumeView`).
 - No metadata push (watch always shows generic "Music").
 
 **What needs fixing.**
-- Wire `musicPlay/Pause/Next/Previous/volume` events to `MPRemoteCommandCenter` /
-  `MPNowPlayingInfoCenter` (a few lines with MediaPlayer) — this is what makes the
-  watch buttons feel real.
+- Metadata push, if wanted, needs a live capture of the `SetMusicMetaDataReq` frame
+  first — it is deliberately NOT wired blind (no verified wire constant in §14).
 
 **What can be enhanced.**
 - Push now-playing metadata on track change (decompiled request classes exist:
-  `SetMusicMetaDataReq` family).
+  `SetMusicMetaDataReq` family — capture-required).
 
 ## 20. Camera remote (`02 12` enter/exit + `01 05 [3]` shutter)
 
@@ -597,8 +595,10 @@ while the remote is active (its session renders to the UI).
 **What needs fixing.** Nothing.
 
 **What can be enhanced.**
-- Warm the session when entering camera-remote mode (the enter command is already sent —
-  start `AVCaptureSession.startRunning()` then).
+- ~~Warm the session when entering camera-remote mode~~ ✅ FIXED (QF13):
+  `WatchCameraCoordinator.warmUp()` (idempotent configure + async `startRunning`) runs
+  when the watch pushes the `.cameraEnter` event, so the first watch-triggered shot no
+  longer pays the cold-session latency.
 - Show the preview (and a countdown) — parity with Crest's remote screen.
 
 ## 21. Find my phone / find my watch (`01 05 [1]`, `02 A5`)
@@ -713,14 +713,18 @@ first hit, `#37`); deferred reconnect while Bluetooth powers on; disconnect sets
 background-BLE service for this; the port reconnects only when the view opens.
 
 **What's wrong.**
-- No retry backoff: a failed `central.connect` (watch out of range) lands in `.failed`
-  and needs a manual tap.
+- ~~No retry backoff: a failed `central.connect` (watch out of range) lands in `.failed`
+  and needs a manual tap.~~ ✅ FIXED (QF14): ONE automatic retry 6 s after
+  `didFailToConnect` / unexpected disconnect (`reconnectAttempted` + `lastLinkTarget`,
+  cancelled by user actions, budget reset on `didConnect` / explicit reconnect). A
+  user-initiated `disconnect()` now stays `.idle` instead of having its teardown
+  callback fabricate a failure.
 - After a spontaneous disconnect mid-history-pull, the queue is wiped (`didDisconnect`
   clears queue) and partial streams are dropped with no resume.
 
 **What needs fixing.**
-- One automatic retry (5–10 s) after `didFailToConnect`/unexpected disconnect, cancelled
-  by user action.
+- Bounded backoff loop (more than one attempt for genuinely transient outages) and a
+  queue-resume policy after reconnect.
 
 **What can be enhanced.**
 - `stateRestoration` (CoreBluetooth background) so pulls continue when the app returns —
@@ -756,10 +760,33 @@ point (weigh-in while wearing the watch).
 
 ---
 
-## 13. Appendix — recovered `BleUUID` constants (ground truth)
+## 13. Appendix — quick-fix log (QF1…QF14, this branch)
+
+| Fix | Finding | Change | Verified by |
+|---|---|---|---|
+| QF1 | #7 clock sync BCD vs binary | `KahaProtocol.setDeviceTime` now writes plain-binary `yy yy MM dd HH mm ss ±HH mm` (`LeonardoBleService.k()` parity) | `testSetDeviceTimePayload` updated + new `testSetDeviceTimeGoldenVector` (`00 87 0E 00 14 1A 09 18 0E 1A 05 2B 05 1E` — 14 B; an earlier draft dropped the minute byte) |
+| QF2 | #17 58-char notification clip | `sendMessage(_:type:maxChars:)` clips at 200 (model capability), `sendNotificationMessage(title:body:)` frames `title\nbody`; `WatchCentral.sendNotification` uses it | compile + existing `testSendMessage*` (40-char multipacket still splits) |
+| QF3 | #12/#23 sleep inflation | `WatchStore.upsert(sleep:)` replaces per-hour slots (`sleepSlots` map) and recomputes totals — re-pulls no longer accumulate; back-compat decode for old records | compile + `testWatchStoreRoundTripAcrossInstances` |
+| QF4 | #24 HealthKit duplicates + midnight-anchored sleep | `writeWatchDays` now queries existing metadata ids across ALL four sample types (steps/HR/sleep/SpO₂ — previously sleep-only AND results were ignored) and skips saved ids before saving; sleep exported per hour at real clock times with per-slot dedupe keys; legacy records fall back to the contiguous path | review + brace-balance (no Swift in sandbox) |
+| QF5 | #18 contacts >20 per request | `syncContacts` batches ≤20 per `00 A8` request (official `maxContactsInOneRequest`); UI cap raised to 100 | compile |
+| QF6 | #6 hardware version never fetched | handshake queues `00 01` (`GET_HARDWARE_VERSION`), `hardwareVersion` published, Device section row | compile |
+| QF7 | #1 scan-list duplicates on RSSI change | `upsertScanEntry` keys by peripheral id, keeps best RSSI/freshest name, sorts by signal | compile |
+| QF8 | #5 stale stream misrouted after ack timeout | `forceCompleteInFlight` resets the `MultipacketAssembler` when a history command times out | compile |
+| QF9 | #21 find-my-phone ack missing | watch's `findMyPhone` event now queues `FIND_MY_PHONE_ACK = 81 05 05 00 01` (constant re-verified from `BleUUID` with corrected branch-target extraction) | compile |
+| QF10 | #8 handshake demands a battery CCCD some firmware never exposes | `didDiscoverCharacteristicsFor` tracks `sawBatteryChar`; gate = UART CCCD **AND** (battery CCCD subscribed OR no battery characteristic was ever discovered) — reset in `resetLink()` | review + brace-balance (no Swift in sandbox) |
+| QF11 | #10/#15 u16-capped steps; `01 23 00` mid-day can return yesterday totals | `KahaProtocol.decodeTodaysFitness` (legacy 3-byte shape + full u32-steps/f32-m/kcal shape with finite/≥0/<100 k float gating; `leU32` helper) + `requestTodaysFitness()` = `GET_TODAY_FITNESS 01 2f 04 00`; handshake and day-0 workout pull now use `01 2f`; `deliverHistoryData(.steps)` reads u32 at payload[5..8] for the full `TodaysStepsDataRes` shape; `applyWorkoutDay` shared upsert for both reply paths | review + brace-balance; tests rewritten/added: `testTodaysStepsDecode` (legacy), `testTodaysFitnessDecodeU32WithFloats` (70 000 steps > u16 max), `testTodaysFitnessIgnoresGarbageFloatTail` (NaN/negative dropped), `testRequestTodaysFitnessFrame` (`01 2f 04 00`) |
+| QF12 | #19 watch music events only logged | `MusicRemoteCoordinator` (MediaPlayer): play/pause/next/prev via `MPRemoteCommandCenter` (toggle-preferring), system volume ±1/16 via hidden `MPVolumeView` slider; `handleWatchEvent` routes the six music events through it | review + brace-balance |
+| QF13 | #20 first watch-shutter shot pays 1–2 s cold session start | `WatchCameraCoordinator.warmUp()` (idempotent configure + async `startRunning`) called when the watch pushes the `.cameraEnter` event | review + brace-balance |
+| QF14 | #25 dead link stays dead until the view is reopened | ONE automatic retry 6 s after `didFailToConnect` / unexpected `didDisconnectPeripheral` (`reconnectAttempted` + `lastLinkTarget`); cancelled by `disconnect()`/new link attempts, budget reset on `didConnect` and explicit `reconnectIfPaired()`; user-initiated teardown now honors `.idle` (the `didDisconnectPeripheral` callback no longer fabricates a failure) | review + brace-balance |
+
+Swift is not available in this sandbox (`swift: command not found`), so QF1–QF14 were
+verified by code review against the decompiled reference only — run `swift test` in
+`scalekit/` and an `xcodebuild` build of `ios/` on a Mac before a hardware session.
+
+## 14. Appendix — recovered `BleUUID` constants (ground truth)
 
 Verified command table from `classes7.dex` (extraction: static `<clinit>` array
-payloads; lengths are total-frame-length like the iOS codec):
+payloads with code-unit branch-target mapping — all 132 constants recovered):
 
 ```
 GET_DEVICE_NAME        = 00 00 04 00     GET_HARDWARE_VERSION  = 00 01 04 00
@@ -767,14 +794,13 @@ GET_FIRMWARE_VERSION   = 00 02 04 00     GET_MAC_ADDRESS       = 00 03 04 00
 GET_SN                 = 00 04 04 00     GET_DEVICE_TIME       = 00 06 04 00
 GET_BATTERY_LEVEL      = 00 08 04 00     SET_DEVICE_TIME       = 00 87 0e 00
 SET_DEVICE_TIME_24H    = 00 82 05 00 00  SET_DISTANCE_UNIT_KM  = 00 a2 05 00 00
-SET_PAIRING_PHONE_TYPE = 00 86 05 00 00  SET_POWER_OFF         = 00 0d 04 00 (family)
-GET_WALK_VALUE         = 01 00 05 00 00  GET_TODAY_FITNESS     = 01 2f 04 00
-HR_BP_INTERVAL/HISTORY = 01 02 07 00     GET_10MIN_SLEEP_DATA  = 01 08 07 00
-GET_1MIN_SLEEP_DATA    = 01 0c 07 00     GET_SPO2_PERIODIC     = 01 26 07 00
-PAUSE_ACTIVITY_SESSION = 01 97 05 00     ACTIVITY_SUMMARY      = 01 23 (family)
-SET_MESSAGE_ALERT_SW   = 02 82 06 00     SEND_MESSAGE_CONTENT  = 02 83 (family)
-GET_ALERT_SWITCH       = 02 03 05 00     SET_WATCH_FACE_REFRESH= 02 ae 05 00
-SET_TURN_OFF_BLE       = 00 a1 05 00 (odd length — one quirk of the constants pool)
+SET_PAIRING_PHONE_TYPE = 00 86 05 00 00  GET_WALK_VALUE        = 01 00 05 00 00
+GET_TODAY_FITNESS      = 01 2f 04 00     HR_BP_INTERVAL/HISTORY= 01 02 07 00
+GET_10MIN_SLEEP_DATA   = 01 08 07 00     GET_1MIN_SLEEP_DATA   = 01 0c 07 00
+GET_SPO2_PERIODIC      = 01 26 07 00     PAUSE_ACTIVITY_SESSION= 01 97 05 00
+SET_MESSAGE_ALERT_SW   = 02 82 06 00     MSG_ALERT_EXT_NOTIFY  = 02 82 08 00
+SEND_MESSAGE_CONTENT   = 02 83 (family)  GET_ALERT_SWITCH      = 02 03 05 00
+SET_WATCH_FACE_REFRESH = 02 ae 05 00     FIND_MY_PHONE_ACK     = 81 05 05 00 01
 ```
 
 Official `DeviceSupportedFeatures` for Storm Call 3 (from

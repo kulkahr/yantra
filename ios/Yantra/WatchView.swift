@@ -393,7 +393,7 @@ struct WatchView: View {
     /// #50: pushes ContactsKit entries to the watch (SetPhoneBookReq parity).
     private var contactsSection: some View {
         Section {
-            Stepper("Contacts to sync: \(contactCount)", value: $contactCount, in: 1...30)
+            Stepper("Contacts to sync: \(contactCount)", value: $contactCount, in: 1...100)
             Button {
                 let granted = CNContactStore.authorizationStatus(for: .contacts) == .authorized
                 guard granted else {
@@ -548,6 +548,9 @@ struct WatchView: View {
         Section("Device") {
             if let fw = watch.firmwareVersion {
                 LabeledContent("Firmware", value: fw)
+            }
+            if let hw = watch.hardwareVersion {
+                LabeledContent("Hardware", value: hw)   // QF6 (audit #6)
             }
             if let t = watch.watchTime {
                 LabeledContent("Watch clock", value: t.formatted(date: .abbreviated, time: .standard))

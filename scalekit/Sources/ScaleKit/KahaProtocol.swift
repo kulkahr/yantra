@@ -173,8 +173,12 @@ public enum KahaProtocol {
         frame(classId: ClassId.fitness, cmdId: FitnessCmd.latestHealth, payload: [type])
     }
 
-    /// `0x00 0x81` device-time set — yyyy(2 BCD) MM dd HH mm ss ±HH mm (10 bytes),
-    /// byte-for-byte the layout `LeonardoBleService.k()` sends.
+    /// `0x00 0x81` device-time set — 10-byte payload, byte-for-byte the
+    /// decompiled `LeonardoBleService.k()`: yyCentury, yy, month, day, hour,
+    /// minute, second as PLAIN BINARY bytes (not BCD), then '+'/'-' (0x2B/0x2D)
+    /// and the |offset| hours/minutes as binary. Golden vector:
+    /// 2026-09-24 14:26:05 IST (+05:30) → `00 87 0E 00 14 1A 09 18 0E 1A 05 2B 05 1E`.
+    /// (14 bytes total: 4-byte frame header + 10-byte payload.)
     public static func setDeviceTime(from date: Date, timeZone: TimeZone = .current) -> [UInt8] {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
@@ -183,12 +187,12 @@ public enum KahaProtocol {
         let offsetMinutes = timeZone.secondsFromGMT(for: date) / 60
         let sign: UInt8 = offsetMinutes >= 0 ? 0x2B /* + */ : 0x2D /* - */
         let ah = abs(offsetMinutes) / 60, am = abs(offsetMinutes) % 60
-        func bcd(_ v: Int) -> UInt8 { UInt8(((v / 10) << 4) | (v % 10)) }
+        func bin(_ v: Int) -> UInt8 { UInt8(truncatingIfNeeded: v) }
         let yy = y % 100
         return frame(classId: ClassId.info, cmdId: InfoCmd.setDeviceTime, payload: [
-            bcd(y / 100), bcd(yy), bcd(c.month ?? 1), bcd(c.day ?? 1),
-            bcd(c.hour ?? 0), bcd(c.minute ?? 0), bcd(c.second ?? 0),
-            sign, UInt8(ah), UInt8(am),
+            bin(y / 100), bin(yy), bin(c.month ?? 1), bin(c.day ?? 1),
+            bin(c.hour ?? 0), bin(c.minute ?? 0), bin(c.second ?? 0),
+            sign, bin(ah), bin(am),
         ])
     }
 
@@ -353,14 +357,42 @@ public enum KahaProtocol {
         return out
     }
 
-    /// Today's steps response `01 00` (`TodaysStepsDataRes` over
-    /// `GET_WALK_VALUE = {1, 0, 5, 0, 0}`): u16 LE at payload[1..2]
-    /// (decompiled reads split[5] | split[6]<<8 of the full frame; split[7]
-    /// and split[8] carry distance/calories halves it ignores). Arrives only
-    /// while the steps request is in flight — the queue guarantees that.
-    public static func decodeTodaysSteps(_ payload: [UInt8]) -> Int? {
-        guard payload.count >= 3 else { return nil }
-        return Int(payload[1]) | (Int(payload[2]) << 8)
+    /// Today's steps/fitness response decoder, shared by `01 00`
+    /// (`GET_WALK_VALUE`) and `01 2f` (`GET_TODAY_FITNESS = {1, 47, 4, 0}`).
+    ///
+    /// QF11 (audit #10): the previous u16-only read at payload[1..2] capped
+    /// the count at 65,535 and dropped the distance/calories floats the
+    /// decompiled parser reads. Two shapes decode:
+    /// - Legacy 3-byte `01 00` shape: type + u16 LE steps (split[5]/split[6]).
+    /// - Full fitness shape (live-verified layout of the `01 23` day summary,
+    ///   field order mirrored by `TodaysFitnessDataRes`): steps u32 LE @0,
+    ///   distance f32 @4, calories f32 @8.
+    /// Floats are gated to finite, non-negative, plausible values so a
+    /// garbage tail can't poison the UI.
+    public struct TodaysFitness: Equatable {
+        public var steps: Int
+        public var meters: Double?
+        public var calories: Double?
+
+        public init(steps: Int, meters: Double? = nil, calories: Double? = nil) {
+            self.steps = steps
+            self.meters = meters
+            self.calories = calories
+        }
+    }
+
+    public static func decodeTodaysFitness(_ payload: [UInt8]) -> TodaysFitness? {
+        // Legacy 3-byte shape (type + u16 steps) from the GET_WALK_VALUE path.
+        if payload.count == 3 {
+            return TodaysFitness(steps: Int(payload[1]) | (Int(payload[2]) << 8))
+        }
+        guard payload.count >= 12 else { return nil }
+        var out = TodaysFitness(steps: leU32(payload, 0))
+        let m = Double(leFloat(payload, 4))
+        if m.isFinite, m >= 0, m < 100_000 { out.meters = m }
+        let kcal = Double(leFloat(payload, 8))
+        if kcal.isFinite, kcal >= 0, kcal < 100_000 { out.calories = kcal }
+        return out
     }
 
     // MARK: - Sleep history (SleepDataRes layout)
@@ -582,40 +614,57 @@ public enum KahaProtocol {
     /// `{len+3, 0, type}` + bytes). Type ids from the `AppNotificationType`
     /// mapping: 1 call, 2 calendar, 3 sms, 4 email, 5 whatsapp, 8 instagram,
     /// 18 other-apps.
-    public static func sendMessage(_ text: String, type: UInt8) -> [[UInt8]] {
-        let content = Array(text.utf8)
+    ///
+    /// Audit fix QF2: the multipacket path previously clipped at 58 chars — a
+    /// legacy-path constant. The decompiled `MessageContentReq` chunks at 16
+    /// bytes/packet with NO 58-char ceiling (`maxCharSupportedInNotification =
+    /// 200` for the Storm Call 3), so the caller decides the clip; this codec
+    /// accepts any length and frames up to `maxChars` (default 200).
+    /// The long path also carries the message title when the app supplies one
+    /// (`setTitleSupportedInNotification(true)`): the text is sent as
+    /// `title\nbody` — the watch renders the first line as the bold header.
+    public static func sendMessage(_ text: String, type: UInt8, maxChars: Int = 200) -> [[UInt8]] {
+        let content = Array(text.utf8.prefix(maxChars))
         // ≤15 chars → single frame; longer → multipacket header + 16-byte chunks.
         guard content.count > 15 else {
             return [frame(classId: ClassId.alerts, cmdId: AlertCmd.sendMessageContent,
                           payload: frameLength(total: 4 + 3 + content.count)
                             + [type] + content)]
         }
-        // Truncated to 58 chars, header 0x7F + packet count (MessageContentReq).
-        let clipped = Array(content.prefix(58))
-        let packetCount = Int(ceil(Double(clipped.count + 24) / 16.0))
+        let packetCount = Int(ceil(Double(content.count + 24) / 16.0))
         var frames: [[UInt8]] = []
         // First packet: 0x7F + meta + inner frame header (02 83 …) + first 3 bytes.
-        let inner = [ClassId.alerts, AlertCmd.sendMessageContent, type]
         var first: [UInt8] = [ClassId.multipacket, 0x00, 0x00, 0x00,
                               UInt8(packetCount), 0x00]
         first.append(contentsOf: [0x00, 0x00, 0x02, AlertCmd.sendMessageContent])
-        first.append(UInt8(inner.count))
+        first.append(0x03)
         first.append(0x00)
-        first.append(contentsOf: Array(clipped.prefix(3)))
+        first.append(contentsOf: Array(content.prefix(3)))
         frames.append(first)
         var offset = 3
         var seq: UInt8 = 1
-        while offset < clipped.count {
-            let chunk = Array(clipped[offset..<min(offset + 16, clipped.count)])
+        while offset < content.count {
+            let chunk = Array(content[offset..<min(offset + 16, content.count)])
             frames.append([ClassId.multipacket, 0x00, 0x00, 0x00, seq] + chunk)
             seq += 1
             offset += 16
         }
         // Patch total length bytes (0x7F header frames carry total len LE).
-        let total = 4 + 3 + clipped.count
+        let total = 4 + 3 + content.count
         frames[0][1] = UInt8(total & 0xFF)
         frames[0][2] = UInt8((total >> 8) & 0xFF)
         return frames
+    }
+
+    /// Convenience for the notification flow: sends `title` + `body` in ONE
+    /// message (`title\nbody`), matching the official app's notification card
+    /// where the first line renders as the app-name header. Total is clipped
+    /// to `maxChars` (200 for the Storm Call 3).
+    public static func sendNotificationMessage(title: String, body: String,
+                                               type: UInt8 = 18, maxChars: Int = 200) -> [[UInt8]] {
+        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = t.isEmpty ? body : "\(t)\n\(body)"
+        return sendMessage(text, type: type, maxChars: maxChars)
     }
 
     /// Call-alert `02 82` uses the same bitmask; calls surface via the message
@@ -690,6 +739,15 @@ public enum KahaProtocol {
     /// Workout summary request `01 23`: days-ago byte (`GetActivitySummaryReq`).
     public static func requestWorkoutSummary(daysAgo: Int) -> [UInt8] {
         frame(classId: ClassId.fitness, cmdId: 0x23, payload: [UInt8(daysAgo)])
+    }
+
+    /// `01 2f` today's fitness summary — steps/distance/calories for day 0
+    /// (`GET_TODAY_FITNESS = {1, 47, 4, 0}`). QF11 (audit #15): the official
+    /// app uses this for "today" instead of `01 23 00`, which mid-day can
+    /// return yesterday-completed totals on some firmwares. Decodes via
+    /// `decodeTodaysFitness` (response class `81 2f`).
+    public static func requestTodaysFitness() -> [UInt8] {
+        frame(classId: ClassId.fitness, cmdId: FitnessCmd.todaysFitness)
     }
 
     // MARK: - Sport session (CurrentSportModeReq / ActivityPauseResumetReq)
@@ -873,6 +931,14 @@ public enum KahaProtocol {
     }
 
     // MARK: - Helpers
+
+    /// Little-endian uint32 at `offset` (today's-fitness u32 steps). Exposed
+    /// for app-layer payload decoders.
+    public static func leU32(_ bytes: [UInt8], _ offset: Int) -> Int {
+        guard offset + 4 <= bytes.count else { return 0 }
+        return Int(bytes[offset]) | (Int(bytes[offset + 1]) << 8)
+            | (Int(bytes[offset + 2]) << 16) | (Int(bytes[offset + 3]) << 24)
+    }
 
     /// Little-endian float32 at `offset` (live-steps distance/calories,
     /// workout summaries). Exposed for app-layer payload decoders.

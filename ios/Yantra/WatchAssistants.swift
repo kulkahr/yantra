@@ -2,6 +2,7 @@ import UIKit
 @preconcurrency import AVFoundation
 import AudioToolbox
 import CoreHaptics
+import MediaPlayer
 
 /// Issue #35 — the watch's find-my-phone must RING and VIBRATE the phone, not
 /// just raise a notification. Plays the ringtone in a loop at route volume,
@@ -110,7 +111,7 @@ final class FindPhoneCoordinator: NSObject, ObservableObject {
 }
 
 /// Issue #36 — the watch's camera-shutter button takes a REAL photo. A tiny
-/// AVFOUNDATION capture session grabs a still, saves to the photo library,
+/// AVFoundation capture session grabs a still, saves to the photo library,
 /// and confirms with a shutter sound + haptic.
 @MainActor
 final class WatchCameraCoordinator: NSObject, ObservableObject {
@@ -162,6 +163,19 @@ final class WatchCameraCoordinator: NSObject, ObservableObject {
         }
     }
 
+    /// QF13 (audit #20): pre-heat the session when the watch announces the
+    /// camera remote (`.cameraEnter` event) — the shutter event usually
+    /// follows within a second, and a cold `startRunning()` eats most of
+    /// that budget, so the first watch-triggered shot could miss the moment.
+    /// Idempotent: configuring twice or starting a running session is a no-op.
+    func warmUp() {
+        if !configured { configure() }
+        guard !session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [session] in
+            session.startRunning()
+        }
+    }
+
     private func capture() {
         let settings = AVCapturePhotoSettings()
         output.capturePhoto(with: settings, delegate: self)
@@ -184,4 +198,72 @@ extension WatchCameraCoordinator: AVCapturePhotoCaptureDelegate {
 
 private extension WatchCameraCoordinator {
     func appendLog(_ s: String) {}
+}
+
+/// QF12 (audit #19) — the watch's transport keys (play/pause/next/prev/volume)
+/// drive the phone's media playback instead of just logging. Dispatch mirrors
+/// what the decompiled app does with its `MediaButtonReceiver` (Android
+/// `dispatchMediaKeyEvent`); on iOS the public surface is the app's
+/// `MPRemoteCommandCenter` + `MPVolumeView`, so:
+/// - play/pause/next/prev go through `MPRemoteCommandCenter` — effective when
+///   Yantra is the now-playing app (e.g. the audio screens it hosts);
+/// - volume steps ride a hidden `MPVolumeView` slider (the standard public
+///   way to move system volume).
+@MainActor
+final class MusicRemoteCoordinator: ObservableObject {
+
+    static let shared = MusicRemoteCoordinator()
+
+    private var volumeView: MPVolumeView?
+
+    /// Routes one watch-initiated control event onto the phone's media session.
+    func apply(_ event: KahaProtocol.WatchControlEvent) {
+        let center = MPRemoteCommandCenter.shared()
+        switch event {
+        case .musicPlay:
+            if center.togglePlayPauseCommand.isEnabled {
+                center.togglePlayPauseCommand.sendCommand(nil)
+            } else {
+                center.playCommand.sendCommand(nil)
+            }
+        case .musicPause:
+            if center.togglePlayPauseCommand.isEnabled {
+                center.togglePlayPauseCommand.sendCommand(nil)
+            } else {
+                center.pauseCommand.sendCommand(nil)
+            }
+        case .musicNext:
+            center.nextTrackCommand.sendCommand(nil)
+        case .musicPrevious:
+            center.previousTrackCommand.sendCommand(nil)
+        case .volumeUp:
+            nudgeSystemVolume(+1.0 / 16.0)
+        case .volumeDown:
+            nudgeSystemVolume(-1.0 / 16.0)
+        case .findMyPhone, .cameraEnter, .cameraCapture,
+             .callReject, .callMute:
+            break   // not a music event
+        }
+    }
+
+    /// Public-API system-volume nudge via a hidden MPVolumeView slider
+    /// (AVAudioSession.outputVolume is read-only without this workaround).
+    private func nudgeSystemVolume(_ delta: Float) {
+        let view: MPVolumeView
+        if let v = volumeView {
+            view = v
+        } else {
+            view = MPVolumeView(frame: CGRect(x: -100, y: -100, width: 1, height: 1))
+            // Watch events usually arrive while the app is backgrounded (no key
+            // window) — a detached UIWindow is the standard host for the hidden
+            // slider; it still drives system volume.
+            let host = UIApplication.shared.connectedScenes
+                .compactMap { ($0 as? UIWindowScene)?.keyWindow }.first ?? UIWindow()
+            host.addSubview(view)
+            volumeView = view
+        }
+        guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
+        let current = AVAudioSession.sharedInstance().outputVolume
+        slider.value = max(0, min(1, current + delta))
+    }
 }
