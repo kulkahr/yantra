@@ -705,3 +705,93 @@ Today) · watch-face switch updates the picker immediately · Firmware shows the
 version (or the raw hex in the log) · Start workout explains the watch-side
 limit · Sync contacts → check the watch's phone book · Start navigation → the
 watch shows the destination card.
+
+## 61. HR history cadence wrong on partial days — OPEN, needs hardware capture
+
+**Symptom:** pulling "Today" before noon spreads the morning's 5-min-cadence HR samples
+across hours 0–23 as if hourly (audit #11); a full-day pull decodes fine.
+
+**Root cause:** `decodeHRHistory` infers cadence as `payload.count / 4 / 24` clamped ≥ 1
+and falls back to a 60-min interval for partial days — the watch actually streams at its
+own automatic-HR rate (proven live in #45: 288 samples = 24 h × 5 min). What is missing
+is the *authoritative* cadence/timestamp source for a partial stream.
+
+**What's needed (one capture, on a Mac with the watch):** run `a6host` (or an HCI snoop
+of the official Crest app) while requesting HR history for TODAY at a known auto-HR
+interval (set 5 min on the watch first). Save the raw `0x7F` start packet —
+`[0x7F, cmd, 0, 0, countLo, countHi, d0, d1, f, f, ts0..ts3, data…]`. The two
+undocumented fields (`d0 d1` and `f f`) plus the 4-byte `ts` are suspected to carry
+sample-count/interval/anchor-timestamp; their layout is what the fix must decode.
+
+**Then implement:**
+1. Decode the start-packet metadata in `MultipacketAssembler` (expose
+   `(cmd, data, intervalMinutes?, anchorTimestamp?)`) and pass it to `decodeHRHistory`.
+2. Timestamp each sample as `anchor + i × interval` instead of midnight synthesis.
+3. Fallback stays: full 24 h streams → `count/24` inference (current, correct).
+
+**Files:** `scalekit/Sources/ScaleKit/KahaProtocol.swift` (`MultipacketAssembler`,
+`decodeHRHistory`), `scalekit/Tests/ScaleKitTests/KahaProtocolTests.swift` (golden
+vector from the capture), `ios/Yantra/WatchCentral.swift` (plumb metadata).
+
+## 62. Music metadata push to watch — OPEN, needs hardware capture
+
+**Symptom:** the watch's music screen shows a generic track while the phone plays
+something else. The official app pushes now-playing title/artist (audit #19).
+
+**Root cause:** the decompiled request classes exist (`SetMusicMetaDataReq` family,
+`musicMetaDataChangeFromApp = TRUE` for this model) but the exact wire bytes — cmd id,
+field order, string encoding (UTF-8 vs UTF-16), length prefixes — were never recovered
+(`decompiled/` is not in the repo; only raw APKs under `apk/boat/`), and blind frames
+risk queue-stalling the strict command queue.
+
+**What's needed (one capture):** HCI snoop (`btsnoop_hci.log`) of the official Crest app
+while music plays and the track changes, with the watch connected. Decode the app→watch
+writes with `analysis/tools/hci_decode.py`, identify the metadata frames (they start
+with a `0x00`-class byte and appear on each track change), and transcribe the layout.
+
+**Then implement:** `KahaProtocol.setMusicMetaData(title:artist:album:duration:)`
+framed from the capture, a `WatchCentral.musicMetaData(...)` queue method, and a
+now-playing observer (`MPNowPlayingInfoCenter.default()` changes) that pushes on track
+change while the watch is live.
+
+**Files:** `scalekit/Sources/ScaleKit/KahaProtocol.swift`,
+`scalekit/Tests/ScaleKitTests/KahaProtocolTests.swift` (golden frame),
+`ios/Yantra/WatchCentral.swift`, `ios/Yantra/WatchAssistants.swift` (observer in
+`MusicRemoteCoordinator`).
+
+## 63. Watch-face upload/delete — SCOPED, needs hardware capture + sources
+
+**Request:** the official app can upload custom watch faces and delete installed ones
+(audit #16: `CustomWatchFaceUploadReq`, `DeleteWatchFaceReq`, background auto-play
+settings, refresh flag `02 ae`). Yantra only lists/switches faces today.
+
+**Known so far (from the decompiled capability map):**
+- List/switch/current read (`02 0D`, `02 8F`, `02 0F`) are implemented and verified.
+- `SET_WATCH_FACE_REFRESH = 02 ae 05 00` is a verified constant (§14 appendix) —
+  likely the refresh trigger after an upload.
+- The upload family itself (`CustomWatchFaceUploadReq`) is a **multipacket transfer**
+  (the face bin is far larger than 150 B) — same `0x7F` request-stream machinery as the
+  phone book (`multipacketRequest`), but the payload container (header, format, CRC
+  type, chunk acknowledgment) is unknown.
+
+**What's needed before implementation:**
+1. **Decompiled sources** — `jadx -d decompiled/boat apk/boat/base.apk` (and the
+   arm64 split) so `CustomWatchFaceUploadReq`/`DeleteWatchFaceReq` and the Realtek OTA
+   chunking service can be read. The apk is in `apk/boat/`; the folder is gitignored,
+   so this runs on the Mac.
+2. **One HCI capture** of the official app uploading a watch face — this proves the
+   transfer handshake (how the watch acks chunks, whether it reuses the DFU-style
+   state machine in `DfuStateMachine`) and gives golden frames for tests.
+
+**Then implement (in order):**
+1. `KahaProtocol.deleteWatchFace(id:)` (small, verify against capture first).
+2. `KahaProtocol.watchFaceUpload(metadata:binData:)` — multipacket stream + chunk acks.
+3. `WatchCentral.uploadWatchFace(...)` with progress (`AckKind.watchFaceUpload(progress:)`)
+   reusing the strict queue's assembler path.
+4. UI: pick a face image → size/format validation → upload progress row in the
+   Watch Faces section + delete swipe action on installed faces.
+
+**Files:** `scalekit/Sources/ScaleKit/KahaProtocol.swift`,
+`scalekit/Tests/ScaleKitTests/KahaProtocolTests.swift`,
+`ios/Yantra/WatchCentral.swift`, `ios/Yantra/WatchView.swift`,
+`analysis/STORM_CALL3_FEATURE_AUDIT.md` §16.
