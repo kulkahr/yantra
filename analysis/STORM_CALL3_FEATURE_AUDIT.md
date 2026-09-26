@@ -458,15 +458,18 @@ sport-mode *detail* history is not supported, consistent with `#49`).
 - ~~The **request parameter is wrong for partial days**~~ ✅ FIXED (QF11): day 0 now uses
   `GET_TODAY_FITNESS (01 2f)` (handshake and `loadWorkoutDays`), `01 23 [n]` stays for
   n ≥ 1 — the official flow. `applyWorkoutDay` gives both reply paths one shared upsert.
-- Summaries are still not persisted (`workoutDays` dies with the session) — inconsistent
-  with FR-2 and the Stored-days section.
+- ~~Summaries are not persisted~~ ✅ FIXED: `applyWorkoutDay` now writes each pulled day
+  into `WatchStore` (steps/calories/distance, idempotent replace like every other
+  metric), so the Stored-days rows stay populated and survive restarts; `workoutDays`
+  remains the session-side view.
 
 **What needs fixing.**
-- Persist `WorkoutDay`s into `WatchStore` (`steps`/`calories`/`distanceMeters` fields
-  already exist).
+- Nothing (request parity + persistence both landed; remaining polish below).
 
 **What can be enhanced.**
-- A 7-day bar chart of steps/kcal (data already queued) like Crest's activity history.
+- ~~Persist workout days across sessions~~ ✅ FIXED (see above).
+- A 7-day bar chart of steps/kcal (data already queued and now stored) like Crest's
+  activity history.
 
 ## 16. Watch faces — list / current / switch (`02 0D`, `02 0F`, `02 8F`)
 

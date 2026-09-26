@@ -715,11 +715,24 @@ final class WatchCentral: NSObject, ObservableObject {
 
     /// QF11 (audit #15): single upsert path for workout-day summaries —
     /// replace in place for a known day, newest day goes to the front.
+    /// Fix #15: the summary also lands in `WatchStore` (steps/calories/
+    /// distance fields already existed; previously `workoutDays` died with
+    /// the session and Stored-days rows stayed empty for pulled days).
+    /// Idempotent: re-pulls REPLACE the day's values (same merge semantics
+    /// as `upsert` for every other metric).
     private func applyWorkoutDay(_ d: WorkoutDay) {
         if let i = workoutDays.firstIndex(where: { $0.id == d.id }) {
             workoutDays[i] = d
         } else {
             workoutDays.insert(d, at: 0)
+        }
+        let date = Calendar.current.date(byAdding: .day, value: -d.id, to: Date()) ?? Date()
+        let key = WatchStore.dayKey(for: date)
+        let dayStart = Calendar.current.startOfDay(for: date)
+        Task { @MainActor in
+            WatchStore.shared.upsert(day: key, dayStart: dayStart,
+                                     steps: d.steps, calories: d.calories,
+                                     distanceMeters: d.distanceMeters)
         }
     }
 
