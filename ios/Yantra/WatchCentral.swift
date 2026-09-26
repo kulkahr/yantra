@@ -159,9 +159,18 @@ final class WatchCentral: NSObject, ObservableObject {
     /// QF14 (audit #25): ONE automatic reconnect retry after an unexpected
     /// disconnect or failed connect — 6 s out, cancelled by any user flow
     /// (disconnect/scan/pair), flag reset when the link comes back up.
-    private var reconnectAttempted = false
     private var reconnectWork: DispatchWorkItem?
     private var lastLinkTarget: (id: UUID, name: String)?
+    /// QF14/Fix #25: bounded backoff state — attempt index into `retryDelays`
+    /// (the ladder, not a one-shot flag) plus the last-attempt timestamp for
+    /// the quiet-period budget reset.
+    private var reconnectAttempts = 0
+    private var lastRetryAt: Date?
+    private let maxReconnectAttempts = 5
+    private let retryDelays: [TimeInterval] = [6, 30, 60, 120, 300]
+    /// Fix #25: commands rescued from a mid-pull disconnect, replayed on the
+    /// fresh link once characteristics are live.
+    private var pendingResume: [QueuedCommand] = []
     /// Set by `disconnect()` so the later `didDisconnectPeripheral` callback
     /// doesn't schedule an auto-retry for a teardown the user asked for.
     private var userDisconnectPending = false
@@ -240,7 +249,7 @@ final class WatchCentral: NSObject, ObservableObject {
         case .idle, .failed: break
         default: return
         }
-        reconnectAttempted = false   // QF14: explicit user action starts a fresh retry budget
+        reconnectAttempts = 0   // QF14/Fix #25: explicit user action starts a fresh ladder
         Task { @MainActor in
             guard let stored = DeviceStore.shared.devices.first(where: { $0.kind == .watch })
             else { return }
@@ -273,23 +282,81 @@ final class WatchCentral: NSObject, ObservableObject {
         }
     }
 
-    /// QF14 (audit #25): ONE self-healing attempt when the link dies without
-    /// user action. 6 s gives the watch time to advertise again; the guard
-    /// flag keeps a flaky link from looping (it resets on `didConnect` and on
-    /// explicit user reconnects).
+    /// Fix #25: requeue commands that died with a dropped link. History and
+    /// settings commands run again on the fresh connection; ONE-SHOT side
+    /// effects (find-phone ack, camera status) are dropped instead of
+    /// replaying events the watch already handled.
+    private static func isResumable(_ c: QueuedCommand) -> Bool {
+        switch c.ack {
+        case .history, .steps, .workoutSummary, .phoneBook, .navigationStatus:
+            return true
+        case .sportStart, .sportEnd, .watchFaceSet, .navigationEvent:
+            return false
+        case .none:
+            // Bare settings/info writes are safe to replay; control pushes
+            // (find-phone ack, camera status) are not.
+            switch c.bytes.first {
+            case KahaProtocol.ClassId.info, KahaProtocol.ClassId.fitness,
+                 KahaProtocol.ClassId.alerts:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Fix #25: requeue commands that died with a dropped link. History and
+    /// settings commands run again on the fresh connection; ONE-SHOT side
+    /// effects (find-phone ack, camera status) are dropped instead of
+    /// replaying events the watch already handled.
+    private static func isResumable(_ c: QueuedCommand) -> Bool {
+        switch c.ack {
+        case .history, .steps, .workoutSummary, .phoneBook, .navigationStatus:
+            return true
+        case .sportStart, .sportEnd, .watchFaceSet, .navigationEvent:
+            return false
+        case .none:
+            // Bare settings/info writes are safe to replay; control pushes
+            // (find-phone ack, camera status) are not.
+            switch c.bytes.first {
+            case KahaProtocol.ClassId.info, KahaProtocol.ClassId.fitness,
+                 KahaProtocol.ClassId.alerts:
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    /// Fix #25 (audit #25): bounded reconnect backoff — 6 s → 30 s → 60 s →
+    /// 2 min → 5 min, then manual only. Each failed attempt schedules the next
+    /// (so the loop walks the ladder); the budget resets on `didConnect`, on
+    /// explicit user reconnects, and after a ≥ 10 min quiet period (watch out
+    /// of range for a while → fresh ladder when it fails again).
     private func scheduleReconnectRetry(reason: String) {
-        guard !reconnectAttempted, let target = lastLinkTarget else { return }
-        reconnectAttempted = true
+        guard let target = lastLinkTarget else { return }
+        if reconnectAttempts >= maxReconnectAttempts {
+            if let last = lastRetryAt, Date().timeIntervalSince(last) >= 600 {
+                reconnectAttempts = 0   // quiet period elapsed — fresh ladder
+            } else {
+                appendLog("\(reason) — auto-retry budget spent; tap reconnect to try again")
+                return
+            }
+        }
+        lastRetryAt = Date()
+        let attempt = reconnectAttempts
+        reconnectAttempts += 1
+        let delay = retryDelays[attempt]
         reconnectWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             guard case .failed = self.stage else { return }   // recovered, or a user flow took over
-            self.appendLog("auto-retry: reconnecting to \(target.name)…")
+            self.appendLog("auto-retry \(attempt + 1)/5 in \(Int(delay)) s: reconnecting to \(target.name)…")
             self.connectStored(peripheralId: target.id, name: target.name)
         }
         reconnectWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: work)
-        appendLog("\(reason) — one auto-retry in 6 s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        appendLog("\(reason) — auto-retry \(attempt + 1)/5 in \(Int(delay)) s")
     }
 
     // MARK: QR pairing (official-app parity, SRD-010 §3)
@@ -344,7 +411,7 @@ final class WatchCentral: NSObject, ObservableObject {
         // auto-retry first so the coming didDisconnectPeripheral callback
         // doesn't resurrect the link.
         userDisconnectPending = true
-        reconnectAttempted = false
+        reconnectAttempts = 0
         reconnectWork?.cancel()
         reconnectWork = nil
         if let p = peripheral { central.cancelPeripheralConnection(p) }
@@ -467,6 +534,7 @@ final class WatchCentral: NSObject, ObservableObject {
         handshakeDone = false
         assembler.reset()
         reconnectWork?.cancel()   // QF14: a new link attempt supersedes any pending auto-retry
+        pendingResume = []
         queue.removeAll()
         ackTimer?.cancel()
         ackTimer = nil
@@ -517,6 +585,14 @@ final class WatchCentral: NSObject, ObservableObject {
         // GET_WALK_VALUE `01 00`.
         enqueue(KahaProtocol.requestTodaysFitness(),
                 label: "today's fitness", ack: .steps)
+        // Fix #25: replay commands rescued from a mid-pull disconnect — this
+        // is the same point the handshake starts, so characteristics are live
+        // and the strict queue drains them in order.
+        if !pendingResume.isEmpty {
+            queue.append(contentsOf: pendingResume)
+            appendLog("resuming \(pendingResume.count) command(s) from before the drop")
+            pendingResume = []
+        }
         handshakeDone = true
         stage = .live
         appendLog("watch live — handshake queued (7 commands)")
@@ -1106,7 +1182,9 @@ extension WatchCentral: CBCentralManagerDelegate {
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
-        reconnectAttempted = false   // QF14: link is up — retry budget restored
+        // QF14/Fix #25: link is up — retry ladder fully restored.
+        reconnectAttempts = 0
+        lastRetryAt = nil
         appendLog("GATT connected — discovering services")
         peripheral.delegate = self
         peripheral.discoverServices(nil)
@@ -1127,10 +1205,22 @@ extension WatchCentral: CBCentralManagerDelegate {
             return
         }
         handshakeDone = false
+        // Fix #25: rescue resumable work (history pulls, today's fitness,
+        // settings) instead of dropping it — replayed on the fresh link once
+        // characteristics are live, in original order (in-flight ran first).
+        // One-shot effects (find-phone ack, sport control) are intentionally
+        // not replayed.
+        var rescued: [QueuedCommand] = []
+        if let c = commandInFlight, Self.isResumable(c) { rescued.append(c) }
+        rescued.append(contentsOf: queue.filter(Self.isResumable))
+        if !rescued.isEmpty {
+            pendingResume = rescued
+            appendLog("link lost mid-pull — \(rescued.count) command(s) queued for resume")
+        }
         queue.removeAll()
         commandInFlight = nil
         stage = .failed(error == nil ? "watch disconnected" : "disconnected: \(error!.localizedDescription)")
-        scheduleReconnectRetry(reason: "unexpected disconnect")   // QF14
+        scheduleReconnectRetry(reason: "unexpected disconnect")   // QF14/Fix #25
     }
 }
 
