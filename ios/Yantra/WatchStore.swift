@@ -109,6 +109,10 @@ final class WatchStore: ObservableObject {
             let decoder = JSONDecoder()
             decoder.dateDecodingStrategy = .iso8601
             days = (try? decoder.decode([WatchDayRecord].self, from: data)) ?? []
+            // Fix #23 (audit #23): canonicalize order + apply the retention
+            // cap at load so a pre-cap file shrinks on first launch.
+            days.sort { $0.dayKey > $1.dayKey }
+            pruneRetention()
         }
     }
 
@@ -168,7 +172,21 @@ final class WatchStore: ObservableObject {
             days.append(rec)
         }
         days.sort { $0.dayKey > $1.dayKey }
+        pruneRetention()
         persist()
+    }
+
+    /// Fix #23 (audit #23): retention policy — keep the newest 365 days and
+    /// drop older records on every write. Rationale: the watch itself retains
+    /// only 7 days (`maxDaysOf*DataOnBand`), so anything older than a year has
+    /// no live source to refresh it; a one-year local window matches typical
+    /// health-data horizons while keeping `watchdata.json` bounded. (Days is
+    /// sorted newest-first, so the tail is the oldest.)
+    private static let retentionDays = 365
+
+    private func pruneRetention() {
+        guard days.count > Self.retentionDays else { return }
+        days.removeLast(days.count - Self.retentionDays)
     }
 
     private func persist() {

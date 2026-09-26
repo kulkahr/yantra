@@ -661,13 +661,15 @@ official app for privacy; the gap is only in what's persisted (see #11/#15 — H
 collapsed, workouts not persisted).
 
 **What's wrong.**
-- Sleep minutes accumulate across re-pulls (`upsert(sleep:)` uses `+=`) — repeated day
-  pulls inflate stored sleep.
-- No pruning: `watchdata.json` grows forever (small, but unbounded).
+- ~~Sleep minutes accumulate across re-pulls (`upsert(sleep:)` uses `+=`)~~ ✅ FIXED
+  (QF3, per-hour slot replace).
+- ~~No pruning: `watchdata.json` grows forever~~ ✅ FIXED: retention cap applied on
+  every write and at load — the newest **365 days** are kept (documented policy: the
+  watch itself only retains 7 days, so older records have no live source; a year is the
+  local horizon).
 
 **What needs fixing.**
-- Idempotent per-hour sleep merge (replace, not add).
-- Optional retention cap (e.g. 365 days) with a documented policy.
+- Nothing (both gaps closed).
 
 **What can be enhanced.**
 - A "day detail" screen (full HR samples + SpO₂ chart) reusing stored data — the store
