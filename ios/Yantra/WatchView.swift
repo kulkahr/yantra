@@ -40,6 +40,10 @@ struct WatchView: View {
         }
         .onChange(of: watch.lastWatchEvent) { _, e in
             if e == .findMyPhone { findPhoneAlert = true }   // #30
+            // Fix #20: watch-initiated camera remote — show the preview too.
+            if e == .cameraEnter, !cameraActive {
+                cameraActive = true
+            }
         }
         .onAppear { watch.reconnectIfPaired() }   // #43: auto-connect stored watch
     }
@@ -483,10 +487,32 @@ struct WatchView: View {
                 Button("Vol +") { watch.musicVolume(80) }
             }
             .buttonStyle(.bordered)
-            // Camera remote (#25)
+            // Camera remote (#25) — with a live preview while active (#20)
             Button(cameraActive ? "Leave camera remote" : "Enter camera remote") {
-                watch.cameraRemote(enter: !cameraActive)
-                cameraActive.toggle()
+                if cameraActive {
+                    WatchCameraCoordinator.shared.stopSession()   // Fix #20: end pipeline
+                    watch.cameraRemote(enter: false)
+                    cameraActive = false
+                } else {
+                    watch.cameraRemote(enter: true)
+                    WatchCameraCoordinator.shared.startSession()  // Fix #20: preview runs
+                    cameraActive = true
+                }
+            }
+            // Fix #20: live preview (Crest parity) — session warms up as it starts.
+            if cameraActive, WatchCameraCoordinator.shared.sessionRunning {
+                CameraPreviewView(session: WatchCameraCoordinator.shared.session)
+                    .frame(height: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(alignment: .bottomTrailing) {
+                        if let last = WatchCameraCoordinator.shared.lastCapture {
+                            Text("last shot " + last.formatted(date: .omitted, time: .shortened))
+                                .font(.caption2)
+                                .padding(6)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .padding(6)
+                        }
+                    }
             }
             // Find my watch (#30, watch side rings)
             Button(findingWatch ? "Stop ringing" : "Ring my watch") {

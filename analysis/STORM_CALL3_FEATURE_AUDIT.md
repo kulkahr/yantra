@@ -43,7 +43,7 @@ opportunities. Feature-by-feature:
 | 17 | Notifications & calls | ⚠️ 200-char limit ignored, no icon/type routing | ✅ **FIXED (QF2)** 200-char + title/body |
 | 18 | Contacts sync | ⚠️ dedupe/multi-number gaps | ✅ **FIXED (QF5)** ≤20/request batching |
 | 19 | Music control | ⚠️ metadata push missing | ✅ **FIXED (QF12)** remote commands wired; metadata push open |
-| 20 | Camera remote | ✅ parity, ⚠️ no preview | ✅ **FIXED (QF13)** session warm-up; preview open |
+| 20 | Camera remote | ✅ parity, ⚠️ no preview | ✅ **FIXED (QF13 + preview)** live preview + warm-up |
 | 21 | Find phone / find watch | ✅ parity | ✅ **FIXED (QF9)** ack frame |
 | 22 | Navigation push | ⚠️ no real navigation feed | ✅ **FIXED** MapKit turn-by-turn auto-feed |
 | 23 | History persistence | ✅ local-only parity, ⚠️ sleep double-count | ✅ **FIXED (QF3)**; ✅ 365-day retention |
@@ -603,7 +603,11 @@ while the remote is active (its session renders to the UI).
   `WatchCameraCoordinator.warmUp()` (idempotent configure + async `startRunning`) runs
   when the watch pushes the `.cameraEnter` event, so the first watch-triggered shot no
   longer pays the cold-session latency.
-- Show the preview (and a countdown) — parity with Crest's remote screen.
+- ~~Show the preview~~ ✅ FIXED: `CameraPreviewView` (`AVCaptureVideoPreviewLayer` via
+  `UIViewRepresentable`) renders the live session in the Controls section while the
+  remote mode is active — whether entered from the phone or the watch (the `.cameraEnter`
+  event now flips the section on). Session stops (battery) when leaving; last-shot time
+  badges the preview. A pre-shot countdown remains a possible nicety.
 
 ## 21. Find my phone / find my watch (`01 05 [1]`, `02 A5`)
 

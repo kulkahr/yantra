@@ -121,8 +121,13 @@ final class WatchCameraCoordinator: NSObject, ObservableObject {
     static let shared = WatchCameraCoordinator()
 
     @Published private(set) var lastCapture: Date?
+    /// Fix #20: true while the capture session runs — the preview UI uses it
+    /// alongside the section's own visibility.
+    @Published private(set) var sessionRunning = false
 
-    private let session = AVCaptureSession()
+    /// Internal (not private) so `CameraPreviewView` can bind the preview
+    /// layer to it (fix #20).
+    let session = AVCaptureSession()
     private let output = AVCapturePhotoOutput()
     private var configured = false
 
@@ -160,6 +165,7 @@ final class WatchCameraCoordinator: NSObject, ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [session] in
             session.startRunning()
             Task { @MainActor in
+                self.sessionRunning = true
                 self.capture()
             }
         }
@@ -175,6 +181,31 @@ final class WatchCameraCoordinator: NSObject, ObservableObject {
         guard !session.isRunning else { return }
         DispatchQueue.global(qos: .userInitiated).async { [session] in
             session.startRunning()
+            Task { @MainActor in self.sessionRunning = true }
+        }
+    }
+
+    /// Fix #20 (audit #20): explicit start for the preview screen (phone-side
+    /// "Enter camera remote"). Idempotent like `warmUp`.
+    func startSession() {
+        if !configured { configure() }
+        guard !session.isRunning else {
+            sessionRunning = true
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [session] in
+            session.startRunning()
+            Task { @MainActor in self.sessionRunning = true }
+        }
+    }
+
+    /// Fix #20: stop the session when the remote mode ends (saves battery —
+    /// the camera pipeline is the most power-hungry thing the app runs).
+    func stopSession() {
+        guard sessionRunning || session.isRunning else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [session] in
+            session.stopRunning()
+            Task { @MainActor in self.sessionRunning = false }
         }
     }
 
@@ -200,6 +231,31 @@ extension WatchCameraCoordinator: AVCapturePhotoCaptureDelegate {
 
 private extension WatchCameraCoordinator {
     func appendLog(_ s: String) {}
+}
+
+/// Fix #20 (audit #20): live preview bound to the coordinator's capture
+/// session — Crest shows one while the watch remote is active; now Yantra
+/// does too (framing the shot before tapping the watch shutter).
+struct CameraPreviewView: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    final class PreviewUIView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    }
+
+    func makeUIView(context: Context) -> PreviewUIView {
+        let view = PreviewUIView()
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ uiView: PreviewUIView, context: Context) {
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
+        }
+    }
 }
 
 /// QF12 (audit #19) — the watch's transport keys (play/pause/next/prev/volume)
