@@ -36,17 +36,17 @@ opportunities. Feature-by-feature:
 | 10 | Live + daily steps | ⚠️ data model truncated | ✅ **FIXED (QF11)** u32 steps + `01 2f` |
 | 11 | HR history | ⚠️ cadence inference is wrong for partial days | open (needs capture) |
 | 12 | Sleep history | ✅ parity (1-min), ⚠️ day-boundary bug | ✅ **FIXED (QF3)** inflation; day-boundary open |
-| 13 | SpO₂ history | ✅ parity, ⚠️ 0-filter mismatch | open (cosmetic) |
+| 13 | SpO₂ history | ✅ parity, ⚠️ 0-filter mismatch | ✅ **FIXED** official-parity filter + opt-in legacy |
 | 14 | Workout/sport sessions | ✅ parity (capability-aware), ⚠️ no real-time sport data | — |
-| 15 | Workout day summaries | ❌ partial-day request mismatch | ✅ **FIXED (QF11)** `01 2f` for today + shared upsert |
+| 15 | Workout day summaries | ❌ partial-day request mismatch | ✅ **FIXED (QF11)** `01 2f` today + shared upsert + stored |
 | 16 | Watch faces (list/switch) | ⚠️ upload absent (out of scope) | — |
 | 17 | Notifications & calls | ⚠️ 200-char limit ignored, no icon/type routing | ✅ **FIXED (QF2)** 200-char + title/body |
 | 18 | Contacts sync | ⚠️ dedupe/multi-number gaps | ✅ **FIXED (QF5)** ≤20/request batching |
 | 19 | Music control | ⚠️ metadata push missing | ✅ **FIXED (QF12)** remote commands wired; metadata push open |
 | 20 | Camera remote | ✅ parity, ⚠️ no preview | ✅ **FIXED (QF13)** session warm-up; preview open |
 | 21 | Find phone / find watch | ✅ parity | ✅ **FIXED (QF9)** ack frame |
-| 22 | Navigation push | ⚠️ no real navigation feed | open (MapKit feed) |
-| 23 | History persistence | ✅ local-only parity, ⚠️ sleep double-count | ✅ **FIXED (QF3)**; retention open |
+| 22 | Navigation push | ⚠️ no real navigation feed | ✅ **FIXED** MapKit turn-by-turn auto-feed |
+| 23 | History persistence | ✅ local-only parity, ⚠️ sleep double-count | ✅ **FIXED (QF3)**; ✅ 365-day retention |
 | 24 | HealthKit export | ⚠️ date fabrication bug | ✅ **FIXED (QF4)** dedup + hourly sleep |
 | 25 | Auto-reconnect | ⚠️ no backoff or re-subscribe-on-fail policy | ✅ **FIXED (QF14 + backoff/resume)** bounded ladder + queue resume |
 | 26 | Multi-device hub | ✅ SRD-009 architecture, ⚠️ single-session transport | open (transport unification) |
@@ -640,16 +640,20 @@ navigation session** (it hooks Google Maps navigation state / its own tracker), 
 each turn automatically. The iOS app requires the user to type distances by hand, which
 is a demo, not a feature.
 
-**What's wrong.** No automatic turn source on iOS (Apple Maps / MapKit directions can
-be observed, but that's unimplemented).
+**What's wrong.** ~~No automatic turn source on iOS~~ ✅ FIXED:
+`WatchNavigationCoordinator` (MapKit + CoreLocation) now feeds turns automatically —
+geocodes the destination, routes from the first GPS fix (`MKDirections`, transport type
+from the nav mode), then matches each location update to the nearest route step and
+pushes remaining distance when the step changes or it moves ≥ 100 m. UI: auto-feed is
+the default during a session with the manual distance field as fallback; Stop tears the
+feed down first. Needs `NSLocationWhenInUseUsageDescription` + network for routing.
 
-**What needs fixing.** Nothing broken (frames verified); the feature is honest but
-manual.
+**What needs fixing.**
+- Nothing broken (frames verified; auto feed now real parity with Crest's Maps feed).
 
 **What can be enhanced.**
-- Integrate MapKit turn-by-turn (`MKDirections` + route-step monitoring) to push each
-  step's remaining distance automatically — that converts this from a demo into real
-  parity with Crest's Maps integration.
+- Turn instruction text (Apple's `MKRoute.Step.instructions` could ride the event
+  destination field on firmwares that render it).
 
 ## 23. History persistence (`WatchStore` → `watchdata.json`)
 

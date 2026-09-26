@@ -3,6 +3,8 @@ import UIKit
 import AudioToolbox
 import CoreHaptics
 import MediaPlayer
+import MapKit
+import CoreLocation
 
 /// Issue #35 — the watch's find-my-phone must RING and VIBRATE the phone, not
 /// just raise a notification. Plays the ringtone in a loop at route volume,
@@ -265,5 +267,158 @@ final class MusicRemoteCoordinator: ObservableObject {
         guard let slider = view.subviews.compactMap({ $0 as? UISlider }).first else { return }
         let current = AVAudioSession.sharedInstance().outputVolume
         slider.value = max(0, min(1, current + delta))
+    }
+}
+
+/// Fix #22 (audit #22) — automatic turn-by-turn feed for the watch's
+/// navigation card (Crest parity: the official app hooks its maps session and
+/// pushes each turn; until now Yantra required the user to type distances).
+/// Geocodes the destination, requests a MapKit route from the first GPS fix,
+/// then matches each location update to the route steps and pushes the
+/// remaining distance (current step + following steps) whenever the step
+/// changes or the remaining distance moves ≥ 100 m. Route matching is
+/// coarse (nearest step polyline point) — good enough for a 100 m push
+/// threshold; needs network for Apple routing and a location permission
+/// (`NSLocationWhenInUseUsageDescription`).
+@MainActor
+final class WatchNavigationCoordinator: NSObject, ObservableObject {
+
+    static let shared = WatchNavigationCoordinator()
+
+    @Published private(set) var active = false
+    @Published private(set) var remainingMeters: Int?
+
+    private let locationManager = CLLocationManager()
+    private var destination = ""
+    private var mode: KahaProtocol.NavigationMode = .vehicle
+    private var route: MKRoute?
+    private var routing = false
+    private var stepIndex = 0
+    private var lastPushed: Int?
+    private var push: ((Int) -> Void)?
+
+    override private init() {
+        super.init()
+        locationManager.delegate = self
+        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+    }
+
+    /// Starts the auto-feed; `push` receives each update — bridge it to
+    /// `WatchCentral.updateNavigation(destination:remainingMeters:mode:)`.
+    func start(destination: String, mode: KahaProtocol.NavigationMode,
+               push: @escaping (String, Int, KahaProtocol.NavigationMode) -> Void) {
+        stop()
+        self.destination = destination
+        self.mode = mode
+        locationManager.activityType = mode == .vehicle ? .automotiveNavigation : .fitness
+        self.push = { rem in push(destination, rem, mode) }
+        active = true
+        locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()   // first fix triggers routing
+    }
+
+    func stop() {
+        active = false
+        locationManager.stopUpdatingLocation()
+        destination = ""
+        route = nil
+        routing = false
+        stepIndex = 0
+        lastPushed = nil
+        remainingMeters = nil
+        push = nil
+    }
+
+    // MARK: Internals
+
+    /// Route request from the first GPS fix (Apple routing needs network).
+    private func routeIfNeeded(from origin: CLLocation) {
+        guard !routing, route == nil else { return }
+        routing = true
+        geocodeAndRoute(destination: destination, origin: origin)
+    }
+
+    private func geocodeAndRoute(destination: String, origin: CLLocation) {
+        CLGeocoder().geocodeAddressString(destination) { [weak self] placemarks, _ in
+            let coord = placemarks?.first?.location?.coordinate
+            Task { @MainActor in
+                guard let self, self.active, let coord else {
+                    self?.routing = false
+                    return
+                }
+                let req = MKDirections.Request()
+                req.source = MKMapItem(placemark: MKPlacemark(coordinate: origin.coordinate))
+                req.destination = MKMapItem(placemark: MKPlacemark(coordinate: coord))
+                req.transportType = self.mode == .vehicle ? .automobile : .walking
+                MKDirections(request: req).calculate { resp, _ in
+                    let r = resp?.routes.first
+                    Task { @MainActor in
+                        guard let self, self.active else { return }
+                        self.routing = false
+                        guard let r else { return }
+                        self.route = r
+                        self.stepIndex = 0
+                        let total = Int(r.distance)
+                        self.remainingMeters = total
+                        self.lastPushed = total
+                        self.push?(total)   // first push: full route distance
+                    }
+                }
+            }
+        }
+    }
+
+    /// Nearest route step to a fix — coarse match: minimum distance from the
+    /// fix to each step polyline's sampled points.
+    private static func nearestStep(of route: MKRoute, at loc: CLLocation) -> Int {
+        var bestIndex = 0
+        var bestDist = Double.greatestFiniteMagnitude
+        for (i, step) in route.steps.enumerated() {
+            let polyline = step.polyline
+            var coords = [CLLocationCoordinate2D](repeating: kCLLocationCoordinate2DInvalid,
+                                                  count: polyline.pointCount)
+            polyline.getCoordinates(&coords, range: NSRange(location: 0,
+                                                            length: polyline.pointCount))
+            for c in coords {
+                let d = loc.distance(from: CLLocation(latitude: c.latitude,
+                                                      longitude: c.longitude))
+                if d < bestDist { bestDist = d; bestIndex = i }
+            }
+        }
+        return bestIndex
+    }
+
+    private func locationUpdated(_ locations: [CLLocation]) {
+        guard active, let loc = locations.last else { return }
+        if route == nil {
+            routeIfNeeded(from: loc)
+            return
+        }
+        guard let route else { return }
+        let idx = Self.nearestStep(of: route, at: loc)
+        stepIndex = idx
+        // Remaining ≈ current step (whole) + following steps; the 100 m push
+        // threshold absorbs the within-step approximation error.
+        var remaining = 0.0
+        for i in stepIndex..<route.steps.count { remaining += route.steps[i].distance }
+        let meters = Int(remaining)
+        remainingMeters = meters
+        if let last = lastPushed, abs(meters - last) >= 100 {
+            lastPushed = meters
+            push?(meters)
+        }
+    }
+}
+
+extension WatchNavigationCoordinator: CLLocationManagerDelegate {
+    nonisolated func locationManager(_ manager: CLLocationManager,
+                                     didUpdateLocations locations: [CLLocation]) {
+        Task { @MainActor in
+            self.locationUpdated(locations)
+        }
+    }
+
+    nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        // GPS gaps are expected (tunnels etc.) — the next fix re-matches.
     }
 }

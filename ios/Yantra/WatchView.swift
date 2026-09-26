@@ -54,6 +54,11 @@ struct WatchView: View {
     @State private var navDistance = ""
     @State private var navMode: KahaProtocol.NavigationMode = .vehicle
     @State private var navActive = false
+    /// Fix #22: automatic MapKit turn-by-turn feed (Crest parity) — on by
+    /// default when a navigation session starts; manual distance entry stays
+    /// as the fallback when routing/GPS is unavailable.
+    @State private var navAutoFeed = true
+    @ObservedObject private var navCoordinator = WatchNavigationCoordinator.shared
     @State private var contactStatus: String?
     @State private var contactCount = 10
 
@@ -350,24 +355,40 @@ struct WatchView: View {
                     Image(systemName: "location.fill").foregroundStyle(.blue)
                     VStack(alignment: .leading) {
                         Text(navDestination.isEmpty ? "Navigating" : navDestination)
-                        Text("\(navMode == .walking ? "Walking" : "Driving") · tap update to push each turn")
+                        Text("\(navMode == .walking ? "Walking" : "Driving") · " +
+                             (navAutoFeed ? "auto feed via MapKit" : "tap update to push each turn"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Stop") { watch.stopNavigation(); navActive = false }
-                        .buttonStyle(.borderedProminent)
-                }
-                HStack {
-                    TextField("Remaining distance (m)", text: $navDistance)
-                        .keyboardType(.numberPad)
-                    Button("Update") {
-                        if let d = Int(navDistance) {
-                            watch.updateNavigation(destination: navDestination,
-                                                   remainingMeters: d, mode: navMode)
-                        }
+                    Button("Stop") {
+                        navCoordinator.stop()   // Fix #22: end the auto feed first
+                        watch.stopNavigation()
+                        navActive = false
                     }
-                    .disabled(Int(navDistance) == nil)
+                    .buttonStyle(.borderedProminent)
                 }
+                if navAutoFeed {
+                    if let rem = navCoordinator.remainingMeters {
+                        LabeledContent("Remaining", value: "\(rem) m")
+                    } else {
+                        Label("Waiting for GPS fix / route…", systemImage: "location.slash")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    HStack {
+                        TextField("Remaining distance (m)", text: $navDistance)
+                            .keyboardType(.numberPad)
+                        Button("Update") {
+                            if let d = Int(navDistance) {
+                                watch.updateNavigation(destination: navDestination,
+                                                       remainingMeters: d, mode: navMode)
+                            }
+                        }
+                        .disabled(Int(navDistance) == nil)
+                    }
+                }
+                Toggle("Auto-feed from MapKit", isOn: $navAutoFeed)
+                    .font(.footnote)
             } else {
                 TextField("Destination…", text: $navDestination)
                 Picker("Mode", selection: $navMode) {
@@ -378,6 +399,15 @@ struct WatchView: View {
                 Button {
                     watch.startNavigation(destination: navDestination, mode: navMode)
                     navActive = true
+                    // Fix #22: start the automatic turn-by-turn feed — it
+                    // geocodes the destination, routes from the first GPS fix
+                    // and pushes remaining distance each turn. Falls back to
+                    // the manual field if routing/GPS is unavailable.
+                    navCoordinator.start(destination: navDestination, mode: navMode) {
+                        dest, remaining, mode in
+                        watch.updateNavigation(destination: dest,
+                                               remainingMeters: remaining, mode: mode)
+                    }
                 } label: {
                     Label("Start navigation on watch", systemImage: "location.navigating.fill")
                 }
@@ -386,7 +416,7 @@ struct WatchView: View {
         } header: {
             Text("Navigation (#60)")
         } footer: {
-            Text("Mirrors the official app: the watch shows the destination card and turn distance while the phone navigates.")
+            Text("Mirrors the official app: the watch shows the destination card and turn distance while the phone navigates. Auto-feed uses Apple routing + GPS (needs location permission & network); turn it off to push distances manually.")
         }
     }
 
