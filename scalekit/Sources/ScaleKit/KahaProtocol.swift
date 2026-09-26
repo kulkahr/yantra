@@ -478,16 +478,23 @@ public enum KahaProtocol {
 
     /// Decodes periodic SpO2 history (`0x01 0x26` response): one byte per
     /// 5-minute slot from `startHour`; `0xFF` = no reading (Spo2PeriodicDataRes
-    /// filters `-1` bytes, and `0` is also not a plausible SpO₂ reading).
-    /// `day` = days ago for the sample's date.
+    /// filters `-1` bytes).
+    ///
+    /// Fix #13 (audit #13): the official parser keeps `0` bytes (`& 0xFF` after
+    /// the `-1` skip) even though 0 % SpO₂ is not physically plausible — Yantra
+    /// previously dropped them, a cosmetic divergence. The default here is now
+    /// official parity (`filterZeros: false`); pass `filterZeros: true` for the
+    /// legacy Yantra behavior (UI/stats sanity — bogus zeros must not dilute
+    /// the day average). `day` = days ago for the sample's date.
     public static func decodeSpo2History(_ payload: [UInt8], startHour: Int, day: Int,
-                                         timeZone: TimeZone = .current) -> [SpO2Sample] {
+                                         timeZone: TimeZone = .current,
+                                         filterZeros: Bool = false) -> [SpO2Sample] {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
         guard let base = cal.date(byAdding: .day, value: -day, to: Date()) else { return [] }
         let dayStart = cal.startOfDay(for: base)
         var out: [SpO2Sample] = []
-        for (i, b) in payload.enumerated() where b != 0xFF && b != 0 {
+        for (i, b) in payload.enumerated() where b != 0xFF && (!filterZeros || b != 0) {
             let minute = startHour * 60 + i * 5
             if let date = cal.date(byAdding: .minute, value: minute, to: dayStart) {
                 out.append(SpO2Sample(date: date, percent: Int(b)))

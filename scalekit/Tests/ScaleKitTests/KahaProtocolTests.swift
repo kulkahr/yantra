@@ -393,15 +393,27 @@ final class KahaProtocolTests: XCTestCase {
     }
 
     func testSpo2HistoryDecodeSkipsInvalid() {
-        // 4 slots: 95, 0xFF (invalid), 0 (implausible), 97 → 2 samples.
+        // 4 slots: 95, 0xFF (invalid), 0 (kept — official parity), 97 → 3 samples.
+        // Fix #13: default is official parity (only 0xFF skipped, zeros kept).
         let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 0, 97], startHour: 8, day: 0)
+        XCTAssertEqual(samples.count, 3)
+        XCTAssertEqual(samples[0].percent, 95)
+        XCTAssertEqual(samples[1].percent, 0)
+        XCTAssertEqual(samples[2].percent, 97)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = .current
+        let hour = cal.component(.hour, from: samples[2].date)
+        XCTAssertEqual(hour, 8, "fourth slot is 15 min past the 08:00 start")
+    }
+
+    func testSpo2HistoryFilterZerosLegacyMode() {
+        // Fix #13: filterZeros: true = legacy Yantra behavior (drop the
+        // implausible 0) → 2 samples.
+        let samples = KahaProtocol.decodeSpo2History([95, 0xFF, 0, 97], startHour: 8, day: 0,
+                                                     filterZeros: true)
         XCTAssertEqual(samples.count, 2)
         XCTAssertEqual(samples[0].percent, 95)
         XCTAssertEqual(samples[1].percent, 97)
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = .current
-        let hour = cal.component(.hour, from: samples[1].date)
-        XCTAssertEqual(hour, 8, "fourth slot is 15 min past the 08:00 start")
     }
 
     func testSpo2HistoryDayOffset() {

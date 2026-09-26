@@ -403,13 +403,15 @@ list in the UI, average persisted.
 (and a SpO₂ byte of 0 is not physically plausible, but Crest still records it).
 Values grouped 12-per-hour into `Spo2HourlyData` for the cloud sync.
 
-**What's wrong.** Minor: filtering `0` diverges from official behavior — only
-cosmetically relevant (a 0 byte is bogus data either way). Timestamp anchoring has the
-same partial-day problem as HR (`day` anchored to midnight of `daysAgo`), which is fine
-for full days.
+**What's wrong.** Minor: ~~filtering `0` diverges from official behavior~~ ✅ FIXED:
+`decodeSpo2History` now defaults to official parity (only `0xFF` skipped, zeros kept,
+`Spo2PeriodicDataRes.b()` byte-for-byte) with an opt-in `filterZeros: true` for the
+legacy Yantra behavior — both shapes unit-tested. Timestamp anchoring has the same
+partial-day problem as HR (`day` anchored to midnight of `daysAgo`), which is fine for
+full days.
 
-**What needs fixing.** Nothing functional; align the `0`-filter with official (drop the
-extra filter) or document the divergence.
+**What needs fixing.** Nothing functional; the `0`-filter divergence is closed and
+documented in-code.
 
 **What can be enhanced.**
 - Hourly min/avg/max grouping (Crest model) and a night-time average (the number that
