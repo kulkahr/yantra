@@ -48,7 +48,7 @@ opportunities. Feature-by-feature:
 | 22 | Navigation push | ⚠️ no real navigation feed | open (MapKit feed) |
 | 23 | History persistence | ✅ local-only parity, ⚠️ sleep double-count | ✅ **FIXED (QF3)**; retention open |
 | 24 | HealthKit export | ⚠️ date fabrication bug | ✅ **FIXED (QF4)** dedup + hourly sleep |
-| 25 | Auto-reconnect | ⚠️ no backoff or re-subscribe-on-fail policy | ✅ **FIXED (QF14)** one 6 s auto-retry |
+| 25 | Auto-reconnect | ⚠️ no backoff or re-subscribe-on-fail policy | ✅ **FIXED (QF14 + backoff/resume)** bounded ladder + queue resume |
 | 26 | Multi-device hub | ✅ SRD-009 architecture, ⚠️ single-session transport | open (transport unification) |
 
 Per-feature details below. Each section ends with **What's wrong / What needs fixing /
@@ -718,18 +718,18 @@ first hit, `#37`); deferred reconnect while Bluetooth powers on; disconnect sets
 background-BLE service for this; the port reconnects only when the view opens.
 
 **What's wrong.**
-- ~~No retry backoff: a failed `central.connect` (watch out of range) lands in `.failed`
-  and needs a manual tap.~~ ✅ FIXED (QF14): ONE automatic retry 6 s after
-  `didFailToConnect` / unexpected disconnect (`reconnectAttempted` + `lastLinkTarget`,
-  cancelled by user actions, budget reset on `didConnect` / explicit reconnect). A
-  user-initiated `disconnect()` now stays `.idle` instead of having its teardown
-  callback fabricate a failure.
-- After a spontaneous disconnect mid-history-pull, the queue is wiped (`didDisconnect`
-  clears queue) and partial streams are dropped with no resume.
+- ~~No retry backoff~~ ✅ FIXED: bounded ladder 6 s → 30 s → 1 → 2 → 5 min, then manual
+  only (fresh ladder after a ≥ 10 min quiet period); resets on connect/explicit
+  reconnect. A user-initiated `disconnect()` stays `.idle` (QF14).
+- ~~After a spontaneous disconnect mid-history-pull, the queue is wiped and partial
+  streams are dropped with no resume~~ ✅ FIXED: resumable commands (history pulls,
+  today's fitness, settings, phone book, nav status) are rescued and replayed in order
+  on the fresh link once characteristics are live; one-shot effects (find-phone ack,
+  sport control, nav events, watch-face set) are intentionally not replayed.
 
 **What needs fixing.**
-- Bounded backoff loop (more than one attempt for genuinely transient outages) and a
-  queue-resume policy after reconnect.
+- Nothing (partial streams themselves are still discarded by the QF8 timeout reset —
+  acceptable: the rescued request simply re-pulls the day).
 
 **What can be enhanced.**
 - `stateRestoration` (CoreBluetooth background) so pulls continue when the app returns —
