@@ -35,7 +35,7 @@ opportunities. Feature-by-feature:
 | 9 | Live health (HR/BP/stress) | ✅ parity | — |
 | 10 | Live + daily steps | ⚠️ data model truncated | ✅ **FIXED (QF11)** u32 steps + `01 2f` |
 | 11 | HR history | ⚠️ cadence inference is wrong for partial days | open (needs capture) |
-| 12 | Sleep history | ✅ parity (1-min), ⚠️ day-boundary bug | ✅ **FIXED (QF3)** inflation; day-boundary open |
+| 12 | Sleep history | ✅ parity (1-min), ⚠️ day-boundary bug | ✅ **FIXED (QF3 + day shift)**; on-device verify open |
 | 13 | SpO₂ history | ✅ parity, ⚠️ 0-filter mismatch | ✅ **FIXED** official-parity filter + opt-in legacy |
 | 14 | Workout/sport sessions | ✅ parity (capability-aware), ⚠️ no real-time sport data | — |
 | 15 | Workout day summaries | ❌ partial-day request mismatch | ✅ **FIXED (QF11)** `01 2f` today + shared upsert + stored |
@@ -368,24 +368,23 @@ byte stream split from the multipacket data list), stage map 0 awake / 1 light /
 3 REM — identical. Crest requests 7 days max (`setMaxDaysOfSleepDataOnBand(7)`).
 
 **What's wrong.**
-- **Day-boundary bug:** the day picker says "Today/Yesterday", but sleep for "today"
-  mostly happened *before* midnight — the watch stores it under the *previous* watch
-  day. `loadDayHistory(day: 0)` therefore usually shows an empty Sleep section for
-  today's night (the data sits in day −1), while the official app's sleep card
-  (correctly) shows "last night" by querying yesterday.
+- ~~**Day-boundary bug**~~ ✅ FIXED: `loadSleepHistory(day:)` shifts the picked day by
+  +1 for the watch request (the night that ended this morning is bucketed as watch day 1)
+  and `persistSleepDay` shifts the store key back, so "Today" now fills with last night's
+  sleep (Crest's "last night" semantics) and the record lands on the calendar day the
+  user picked. SpO₂/HR stay true-day (no shift). On-device verify pending — if this
+  firmware buckets the night under watch day 0 instead, the shift flips (one-line).
 - The `data.count % 15 == 0` heuristic misdetects when the 1-min stream happens to be a
   multiple of 6 hours or vice versa (e.g. 90 bytes = 6 h × 15 = 18 h × 5 6-byte … both
   divide); wrong `bytesPerHour` garbles stages silently.
-- `WatchStore.upsert(sleep:)` **adds** minutes per hour each pull — re-pulling the same
-  day (day-picker toggle back and forth) inflates sleep totals cumulatively.
+- ~~`WatchStore.upsert(sleep:)` **adds** minutes per hour each pull~~ ✅ FIXED (QF3,
+  per-hour slot replace).
 
 **What needs fixing.**
-- Default the sleep pull to `day: 1` ("last night") — or better, pull both 0 and 1 and
-  render the latest night with data (Crest parity).
+- On-device verify of the day-bucket convention (log label now names the watch day).
 - Replace the modulo heuristic: 1-min days are exactly `15 × hours-streamed`; stream the
   expected length from the multipacket header (`(endHour-startHour+1) × 15`) and use the
   request's own parameters, falling back to legacy only when the cmd was `01 08`.
-- Make `upsert(sleep:)` idempotent per hour (store per-hour stage minutes, not +=).
 
 **What can be enhanced.**
 - Sleep target / bedtime card (Crest has `SleepTargetSupported = true` and dedicated

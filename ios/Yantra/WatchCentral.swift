@@ -441,19 +441,39 @@ final class WatchCentral: NSObject, ObservableObject {
     /// switching off the legacy 10-min variant. Results persist into
     /// `WatchStore` (SRD-010 FR-2).
     func loadSleepAndSpo2History(day: Int) {
+        loadSleepHistory(day: day)
+        loadSpo2History(day: day)
+    }
+
+    /// #12 (day-boundary): sleep for the day the user picks lives in the
+    /// watch's NEXT day bucket — the night that ended this morning is stored
+    /// as watch day 1, not 0 (the watch buckets by the day the night STARTED).
+    /// Callers pass the picked day; this shifts it so "Today" fills with last
+    /// night's data instead of an empty watch-day-0 pull. `persistSleepDay`
+    /// shifts the store key back so the record lands on the picked day.
+    func loadSleepHistory(day: Int) {
+        let watchDay = day + 1
         sleepHours = []
+        enqueue(KahaProtocol.requestSleepHistory1Min(day: watchDay, startHour: 0, endHour: 23),
+                label: "sleep history (1-min) night of watch day \(watchDay)",
+                ack: .history(.sleep(day: watchDay)))
+    }
+
+    /// Periodic SpO2 is a true-day metric (measured across the whole day) —
+    /// no boundary shift.
+    func loadSpo2History(day: Int) {
         spo2Samples = []
-        enqueue(KahaProtocol.requestSleepHistory1Min(day: day, startHour: 0, endHour: 23),
-                label: "sleep history (1-min) day \(day)", ack: .history(.sleep(day: day)))
         enqueue(KahaProtocol.requestSpo2History(day: day, startHour: 0, endHour: 23),
                 label: "SpO2 history day \(day)", ack: .history(.spo2(day: day)))
     }
 
     /// Pulls everything the official app shows for a day: HR/BP, sleep, SpO2
-    /// (steps arrive as live pushes while connected).
+    /// (steps arrive as live pushes while connected). Sleep uses the #12
+    /// day-boundary shift (watch day n+1 for the picked day n).
     func loadDayHistory(day: Int) {
         loadHRHistory(day: day)
-        loadSleepAndSpo2History(day: day)
+        loadSleepHistory(day: day)
+        loadSpo2History(day: day)
     }
 
     // MARK: - Internals
@@ -1097,7 +1117,10 @@ final class WatchCentral: NSObject, ObservableObject {
 
     private func persistSleepDay() {
         guard !sleepHours.isEmpty else { return }
-        let key = WatchStore.dayKey(for: Date().addingTimeInterval(Double(-hrDay) * 86_400))
+        // #12: a sleep stream for watch day n is the night that ended (n-1)
+        // days ago's morning — store it under that calendar day so the day the
+        // user picked holds it (watch day 1 = last night → today's record).
+        let key = WatchStore.dayKey(for: Date().addingTimeInterval(Double(-(hrDay - 1)) * 86_400))
         let hours = sleepHours
         Task { @MainActor in
             for h in hours {
